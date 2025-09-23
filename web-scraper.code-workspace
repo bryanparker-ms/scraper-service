@@ -1,0 +1,14 @@
+{
+    "folders": [
+        {
+            "path": "./web-scraper"
+        },
+        {
+            "path": "./infra"
+        }
+    ],
+    "settings": {
+        "makefile.configureOnOpen": false,
+        "python.analysis.autoSearchPaths": true
+    }
+}
