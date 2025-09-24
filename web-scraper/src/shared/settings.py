@@ -1,5 +1,5 @@
 import os
-from typing import Literal
+from typing import Any, Literal
 from dotenv import load_dotenv
 from botocore.config import Config as BotoConfig
 from pydantic import BaseModel, Field
@@ -13,17 +13,19 @@ class Settings(BaseModel):
     queue_url: str = Field(default='')
     bucket_name: str = Field(default='scrape-results')
     ddb_page_limit: int = Field(default=1000)
+    visibility_timeout: int = Field(default=60 * 3) # 3 minutes
 
-    def __post_init__(self):
+    def model_post_init(self, __context: Any):
         load_dotenv()
 
         self.aws_region = get('AWS_REGION', 'us-east-1')
         self.aws_access_key_id = get_or_throw('AWS_ACCESS_KEY_ID')
         self.aws_secret_access_key = get_or_throw('AWS_SECRET_ACCESS_KEY')
         self.table_name = get('TABLE_NAME', 'scrape-state')
-        self.queue_url = get_or_throw('QUEUE_URL')
-        self.bucket_name = get('BUCKET_NAME', 'scrape-results')
+        self.queue_url = get_or_throw('WEB_SCRAPER_QUEUE_URL')
+        self.bucket_name = get('WEB_SCRAPER_RESULTS_BUCKET', 'scrape-results')
         self.ddb_page_limit = int(get('DDB_PAGE_LIMIT', '1000'))
+        self.visibility_timeout = int(get('WEB_SCRAPER_QUEUE_MESSAGE_VISIBILITY_SECS', '180'))
 
     def proxy_config(self, proxy_type: Literal['datacenter', 'residential', 'web-unlocker']) -> dict[str, str]:
         proxy_url = get_or_throw(f'PROXY_URL')

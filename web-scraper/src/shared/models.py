@@ -1,16 +1,13 @@
 from typing import Any, Literal, Optional, get_args
-from pydantic import BaseModel
-from datetime import datetime
+from pydantic import BaseModel, Field
+from src.shared.utils import now_iso
 
 
 RetryableError = Literal['timeout', 'server_error', 'network_error', 'proxy_error', 'blocked', 'unexpected']
 NonRetryableError = Literal['no_results', 'not_found', 'invalid_input']
+
 JobStatus = Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']
 JobItemStatus = Literal['queued', 'in_progress', 'success', 'error', 'retrying']
-
-
-class JobItemInput(BaseModel):
-    data: dict[str, Any]
 
 
 class JobItemOutput(BaseModel):
@@ -19,15 +16,17 @@ class JobItemOutput(BaseModel):
 
 
 class JobItem(BaseModel):
-    item_id: str
     job_id: str
-    status: JobItemStatus
-    input: JobItemInput
-    output: JobItemOutput
+    item_id: str
+    status: JobItemStatus = 'queued'
+    input: dict[str, Any]
+    output: Optional[JobItemOutput] = None
     error_type: Optional[RetryableError | NonRetryableError] = None
     retry_count: int = 0
-    created_at: datetime
-    updated_at: datetime
+    first_attempt_at: Optional[str] = None
+    last_attempt_at: Optional[str] = None
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
 
     @classmethod
     def is_retryable_error(cls, error_type: Optional[RetryableError | NonRetryableError]) -> bool:
@@ -38,9 +37,60 @@ class JobItem(BaseModel):
         return error_type in get_args(NonRetryableError)
 
 
+class ThrottlingPolicy(BaseModel):
+    rate_limit_per_second: float = 1.0
+    concurrent_requests: int = 5
+
+
+class ProxyGeolocationPolicy(BaseModel):
+    state: Optional[str] = None
+    city: Optional[str] = None
+
+
+class ProxyPolicy(BaseModel):
+    type: Literal['datacenter', 'residential', 'web-unlocker'] = 'datacenter'
+    geo_target: Optional[ProxyGeolocationPolicy] = None
+
+
+class RetryPolicy(BaseModel):
+    max_retries: int = 3
+    backoff_strategy: Literal['linear', 'exponential'] = 'linear'
+    backoff_factor: float = 1.0
+
+
+class TimeoutPolicy(BaseModel):
+    connect_timeout_seconds: int = 10
+    request_timeout_seconds: int = 30
+
+
+class CircuitBreakerPolicy(BaseModel):
+    min_requests: int = 50
+    failure_threshold_percentage: float = 0.25
+    open_circuit_seconds: int = 300
+
+
+class ExecutionPolicy(BaseModel):
+    throttling: ThrottlingPolicy = ThrottlingPolicy()
+    proxy: ProxyPolicy = ProxyPolicy()
+    retries: RetryPolicy = RetryPolicy()
+    timeouts: TimeoutPolicy = TimeoutPolicy()
+    circuit_breaker: CircuitBreakerPolicy = CircuitBreakerPolicy()
+
+
 class Job(BaseModel):
     job_id: str
-    items: list[JobItem]
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
+    job_name: Optional[str] = None
+    status: JobStatus = 'created'
+    execution_policy: ExecutionPolicy = ExecutionPolicy()
+    total_items: int = 0
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class JobItemSummary(BaseModel):
+    queued: int = 0
+    running: int = 0
+    success: int = 0
+    error: int = 0
+    max_retries: int = 0
+    skipped: int = 0
