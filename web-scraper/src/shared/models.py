@@ -9,10 +9,14 @@ NonRetryableError = Literal['no_results', 'not_found', 'invalid_input']
 JobStatus = Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']
 JobItemStatus = Literal['queued', 'in_progress', 'success', 'error', 'retrying']
 
+"""
+Job models
+"""
 
 class JobItemOutput(BaseModel):
     extracted_data: Optional[dict[str, Any]] = None
     screenshot_key: Optional[str] = None
+    storage_keys: Optional[dict[str, str]] = None  # Keys to stored artifacts in S3/storage
 
 
 class JobItem(BaseModel):
@@ -80,6 +84,7 @@ class ExecutionPolicy(BaseModel):
 class Job(BaseModel):
     job_id: str
     job_name: Optional[str] = None
+    scraper_id: Optional[str] = None  # Explicitly specify which scraper to use
     status: JobStatus = 'created'
     execution_policy: ExecutionPolicy = ExecutionPolicy()
     total_items: int = 0
@@ -94,3 +99,41 @@ class JobItemSummary(BaseModel):
     error: int = 0
     max_retries: int = 0
     skipped: int = 0
+
+
+"""
+Storage models
+"""
+
+class StorageKeys(BaseModel):
+    """References to stored artifacts in storage backend."""
+    html: Optional[str] = None
+    data: Optional[str] = None
+    metadata: Optional[str] = None
+    screenshot: Optional[str] = None
+    document: Optional[str] = None
+
+
+class ItemMetadata(BaseModel):
+    """Metadata about a scrape operation."""
+    job_id: str
+    item_id: str
+    status: Literal['success', 'error']
+    scraper_name: str
+    scraper_version: str = "1.0.0"
+    attempt_number: int
+    started_at: str
+    completed_at: str
+    duration_ms: int
+    storage_keys: StorageKeys
+    http_metadata: Optional[dict[str, Any]] = None
+    error: Optional[dict[str, Any]] = None
+
+
+class ManifestItem(BaseModel):
+    """Entry in a job manifest."""
+    item_id: str
+    status: Literal['success', 'error']
+    storage_keys: StorageKeys
+    size_bytes: int = 0
+    completed_at: str = Field(default_factory=now_iso)

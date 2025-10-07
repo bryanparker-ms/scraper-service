@@ -1,0 +1,29 @@
+I am designing and building a robust web scraping utility that can manage large scrape jobs across potentially hundreds of thousands (maybe low millions) number of scraped data points. What I'm trying to scrape is property tax information (e.g., tax bills, property assessments).
+
+I need to account for the fact that some sites have measures in place to throttle/block scrapers. I have access to BrightData that I can use. For some sites, we could get by with just data center proxies (or maybe no proxy at all), while others might require residential proxies, or targeted residential proxies (e.g., for a particular state).
+
+In some cases, I _might_ be able to get by with just making HTTP requests using something like httpx, while other times we might need to use Playwright or another programmatic browser.
+
+These bulk jobs are going to usually be at the county level (i.e., US county), and will generally consist of a couple of steps like (as an example): 1) load a URL, 2) submit some form data, 3) click on an item in the search results, 4) maybe a navigation or two, 5) collect data on the page, 6) Done.
+
+Any of these individual requests may fail for any number of reasons, including: 1) timeout, 2) no property found, 3) page structure changed, 4) blocked, 5) couldn't get to target location, 6) page under maintenance, 7) maybe others?
+
+There are lots of different types of errors—some recoverable and/or retry-able... some maybe not.
+
+So far, I have a "controller" which is a set of FastAPI endpoints that recieves jobs (and job items), stores them in DynamoDB, and adds them to an SQS queue. I also have a "workers" component which reads from the SQS queue (in a loop) and delegates to a "scraper" component.
+
+I'm working on designing the "scraper" portion of this. In general, there are three types of scrapers (that I see at this point):
+
+1. Bespoke httpx based scrapers for a given site that we can use to "navigate" the site and collect data. These scrapers are targeting specific pages. We may have to make a few hops in order to get there (i.e., we may land on a given page to establish a session, and then simulate a POST request to get to the next page).
+2. Bespoke Playwright based scrapers where we can write playwright code to navigate the site and collect information. Playwright might be an implementation detail that's hidden from the scraper, idk
+3. A "generic" scraper that executes a list of "actions" (e.g., clicks, submits, etc.) on a page. This is the most generic and flexible type of scraper. I have another service that is a Chrome extension that records user's workflows and then stores those actions in a database as JSON. I'd like to be able execute these actions on a page.
+
+We need to figure out how these scrapers are designed and how they are "managed" by the worker when it pulls work items from the queue.
+
+There are some other concerns that we need to account for too... I'll mention them now in case it influences the design of the scraper:
+
+-   We need to maintain state/status of the scrape job and the scrape job items. We need to track which ones have yet to be done, which ones are done and what's their status, which ones are being retried (we shouldn't just retry indefinitely, we should cap the retries).
+-   I kind of think we might need a circuit breaker situation of sorts too where we don't try to naively scrape hundreds of thousands of times if we notice that it's likely not going to work. For example, we might notice that we have a series of failures or something, and we can extrapolate that it's likely not going to work for the rest.
+-   At this point, I'm proposing that the scraper's main job is to get to the target page and then save the page HTML in S3. This allows us to post-process the page HTML and extract the data we want from the page(s) so that if we decide we want to go back and extract more information, we have the source handy.
+
+Help me design these components. Begin by listing all assumptions and clarifying requirements. Be exhaustive and consider edge cases, failure modes, and robustness concerns. Do not stop at a minimal implementation — I want you to think through the tradeoffs and outline at least 3 alternatives before converging on a recommendation. Do not optimize for brevity. I want completeness and detailed reasoning.

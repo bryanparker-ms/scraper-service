@@ -1,6 +1,7 @@
-from typing import Optional, Protocol, Sequence, Tuple
+from typing import Any, Literal, Optional, Protocol, Sequence, Tuple
 
-from src.shared.models import Job, JobItem, JobItemSummary
+from src.shared.models import ItemMetadata, Job, JobItem, JobItemOutput, JobItemSummary, StorageKeys, RetryableError, NonRetryableError
+from src.worker.models import ScrapeResult
 
 class DatabaseService(Protocol):
     def create_job_if_not_exists(self, job: Job):
@@ -21,6 +22,32 @@ class DatabaseService(Protocol):
     def create_job_item(self, job_id: str, job_item: JobItem):
         ...
 
+    def update_job_item_success(
+        self,
+        job_id: str,
+        item_id: str,
+        output: JobItemOutput,
+        completed_at: str
+    ) -> None:
+        """Update job item with success status and output."""
+        ...
+
+    def update_job_item_error(
+        self,
+        job_id: str,
+        item_id: str,
+        error_type: RetryableError | NonRetryableError,
+        error_message: str,
+        retry_count: int,
+        last_attempt_at: str
+    ) -> None:
+        """Update job item with error status and details."""
+        ...
+
+    def get_job_item(self, job_id: str, item_id: str) -> JobItem:
+        """Retrieve a specific job item."""
+        ...
+
 
 QueueResponse = Tuple[JobItem, str, str]
 
@@ -29,4 +56,52 @@ class QueueService(Protocol):
         ...
 
     def dequeue(self) -> Optional[QueueResponse]:
+        ...
+
+
+class ResultStorage(Protocol):
+    """Generic interface for storing scrape results."""
+
+    async def store_result(
+        self,
+        job_item: JobItem,
+        result: ScrapeResult,
+        metadata: ItemMetadata
+    ) -> StorageKeys:
+        """
+        Store all artifacts for a scrape result.
+
+        Args:
+            job_item: The job item being processed
+            result: The scrape result containing HTML, data, screenshots
+            metadata: Metadata about the scraping operation
+
+        Returns:
+            StorageKeys with references to stored artifacts
+
+        Raises:
+            StorageError: If all artifact uploads fail
+        """
+        ...
+
+    async def get_html(self, job_id: str, item_id: str) -> str:
+        """Retrieve HTML for an item."""
+        ...
+
+    async def get_data(self, job_id: str, item_id: str) -> dict[str, Any]:
+        """Retrieve extracted data for an item."""
+        ...
+
+    async def get_metadata(self, job_id: str, item_id: str) -> ItemMetadata:
+        """Retrieve metadata for an item."""
+        ...
+
+    async def update_manifest(
+        self,
+        job_id: str,
+        item_id: str,
+        storage_keys: StorageKeys,
+        status: Literal['success', 'error']
+    ) -> None:
+        """Update job manifest with completed item."""
         ...

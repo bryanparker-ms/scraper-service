@@ -7,9 +7,9 @@ from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 from src.controller.errors import JobNotFound
 from src.shared.interfaces import DatabaseService
-from src.shared.models import Job, JobItem, JobItemStatus, JobItemSummary
+from src.shared.models import Job, JobItem, JobItemOutput, JobItemStatus, JobItemSummary, RetryableError, NonRetryableError
 from src.shared.settings import Settings
-from src.shared.utils import item_sk, job_pk
+from src.shared.utils import item_sk, job_pk, now_iso
 
 serializer = TypeSerializer()
 deserializer = TypeDeserializer()
@@ -143,6 +143,108 @@ class DynamoDBDatabaseService(DatabaseService):
             TableName=self.settings.table_name,
             Item=_to_ddb_item(ddb_item),
             ConditionExpression='attribute_not_exists(pk) AND attribute_not_exists(sk)'
+        )
+
+    def get_job_item(self, job_id: str, item_id: str) -> JobItem:
+        """Retrieve a specific job item."""
+        resp = self.ddb_client.get_item(
+            TableName=self.settings.table_name,
+            Key={
+                'pk': {'S': job_pk(job_id)},
+                'sk': {'S': item_sk(item_id)}
+            },
+            ConsistentRead=True,
+        )
+
+        if 'Item' not in resp:
+            raise ValueError(f"Job item {item_id} not found for job {job_id}")
+
+        ddb_item = _from_ddb_item(resp['Item'])
+        return JobItem.model_validate(ddb_item)
+
+    def update_job_item_success(
+        self,
+        job_id: str,
+        item_id: str,
+        output: JobItemOutput,
+        completed_at: str
+    ) -> None:
+        """Update job item with success status and output."""
+        self.ddb_client.update_item(
+            TableName=self.settings.table_name,
+            Key={
+                'pk': {'S': job_pk(job_id)},
+                'sk': {'S': item_sk(item_id)}
+            },
+            UpdateExpression=(
+                'SET #status = :status, '
+                '#output = :output, '
+                '#updated_at = :updated_at, '
+                '#last_attempt_at = :last_attempt_at'
+            ),
+            ExpressionAttributeNames={
+                '#status': 'status',
+                '#output': 'output',
+                '#updated_at': 'updated_at',
+                '#last_attempt_at': 'last_attempt_at',
+            },
+            ExpressionAttributeValues=_to_ddb_item({
+                ':status': 'success',
+                ':output': output.model_dump(),
+                ':updated_at': now_iso(),
+                ':last_attempt_at': completed_at,
+            })
+        )
+
+    def update_job_item_error(
+        self,
+        job_id: str,
+        item_id: str,
+        error_type: RetryableError | NonRetryableError,
+        error_message: str,
+        retry_count: int,
+        last_attempt_at: str
+    ) -> None:
+        """Update job item with error status and details."""
+        # Determine if this should be marked as 'error' or 'retrying'
+        # Based on whether it's a retryable error
+        from src.shared.models import JobItem as JobItemModel
+        is_retryable = JobItemModel.is_retryable_error(error_type)
+
+        # TODO: Also check retry_count against max_retries from execution policy
+        # For now, we'll use status 'error' for non-retryable, 'retrying' for retryable
+        status: JobItemStatus = 'retrying' if is_retryable else 'error'
+
+        self.ddb_client.update_item(
+            TableName=self.settings.table_name,
+            Key={
+                'pk': {'S': job_pk(job_id)},
+                'sk': {'S': item_sk(item_id)}
+            },
+            UpdateExpression=(
+                'SET #status = :status, '
+                '#error_type = :error_type, '
+                '#retry_count = :retry_count, '
+                '#updated_at = :updated_at, '
+                '#last_attempt_at = :last_attempt_at, '
+                '#first_attempt_at = if_not_exists(#first_attempt_at, :first_attempt_at)'
+            ),
+            ExpressionAttributeNames={
+                '#status': 'status',
+                '#error_type': 'error_type',
+                '#retry_count': 'retry_count',
+                '#updated_at': 'updated_at',
+                '#last_attempt_at': 'last_attempt_at',
+                '#first_attempt_at': 'first_attempt_at',
+            },
+            ExpressionAttributeValues=_to_ddb_item({
+                ':status': status,
+                ':error_type': error_type,
+                ':retry_count': retry_count,
+                ':updated_at': now_iso(),
+                ':last_attempt_at': last_attempt_at,
+                ':first_attempt_at': last_attempt_at,
+            })
         )
 
     def __create_ddb_client(self, settings: Settings) -> DynamoDBClient:

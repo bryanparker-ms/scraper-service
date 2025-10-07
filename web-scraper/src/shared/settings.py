@@ -14,6 +14,8 @@ class Settings(BaseModel):
     bucket_name: str = Field(default='scrape-results')
     ddb_page_limit: int = Field(default=1000)
     visibility_timeout: int = Field(default=60 * 3) # 3 minutes
+    use_local_storage: bool = Field(default=False)
+    local_storage_path: str = Field(default='./storage')
 
     def model_post_init(self, __context: Any):
         load_dotenv()
@@ -26,6 +28,8 @@ class Settings(BaseModel):
         self.bucket_name = get('WEB_SCRAPER_RESULTS_BUCKET', 'scrape-results')
         self.ddb_page_limit = int(get('DDB_PAGE_LIMIT', '1000'))
         self.visibility_timeout = int(get('WEB_SCRAPER_QUEUE_MESSAGE_VISIBILITY_SECS', '180'))
+        self.use_local_storage = get('USE_LOCAL_STORAGE', 'false').lower() == 'true'
+        self.local_storage_path = get('LOCAL_STORAGE_PATH', './storage')
 
     def proxy_config(self, proxy_type: Literal['datacenter', 'residential', 'web-unlocker']) -> dict[str, str]:
         proxy_url = get_or_throw(f'PROXY_URL')

@@ -69,7 +69,7 @@ def _to_sqs_messages(job_items: Sequence[JobItem]) -> Sequence[SendMessageBatchR
         'MessageBody': json.dumps({
             'job_id': job_item.job_id,
             'item_id': job_item.item_id,
-            'inputs': job_item.input,
+            'input': job_item.input,
         })
     } for i, job_item in enumerate(job_items)]
 
