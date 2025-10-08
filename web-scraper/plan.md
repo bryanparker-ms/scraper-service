@@ -1,6 +1,6 @@
 # Web Scraper Worker Development Plan
 
-*Last Updated: 2025-01-02*
+*Last Updated: 2025-01-07*
 
 This document outlines the complete development plan for building out the web scraper worker system, organized in incremental chunks for verification and testing.
 
@@ -52,154 +52,232 @@ Build a robust, scalable web scraping worker system that can:
 - [x] Update worker scraper selection to use HTTP scraper based on inputs
 - [x] Test HTTP scraper with real web requests
 
-## 🔄 Phase 3: Real-World HTTP Scrapers (NEXT)
+## ✅ Phase 3: Result Storage & Status Management (COMPLETED)
 
-### 3.1 Property Tax Scraper Template
+### 3.1 S3 Result Storage ✅
+- [x] Create `ResultStorage` Protocol interface and S3 implementation
+- [x] Store scraper results (HTML, data, screenshots) in S3 with compression
+- [x] Generate incremental manifest files for easy result discovery
+- [x] Implement proper S3 key naming conventions (`{job_id}/items/{item_id}/`)
+- [x] Add result storage integration to worker loop
+- [x] Create `LocalFilesystemStorage` for local development/testing
+- [x] Add configuration to switch between S3 and local storage
+
+**Storage Structure**:
+```
+{job_id}/items/{item_id}/html.html           # Raw HTML (gzipped if >1KB)
+{job_id}/items/{item_id}/data.json           # Extracted data
+{job_id}/items/{item_id}/metadata.json       # Scrape metadata
+{job_id}/items/{item_id}/screenshot.png      # Optional screenshot
+{job_id}/manifests/items/{item_id}.json      # Per-item manifest
+```
+
+### 3.2 Job Status Management ✅
+- [x] Update job item status in DynamoDB after scraping (success/error)
+- [x] Track retry counts, error details, and attempt timestamps
+- [x] Store storage keys (S3 references) in DynamoDB
+- [x] Implement proper error classification and retry logic in worker
+- [x] Handle both retryable and non-retryable errors appropriately
+- [x] Add comprehensive logging for debugging
+
+## ✅ Phase 4: Scraper Registry & Selection (COMPLETED)
+
+### 4.1 Scraper Registry System ✅
+- [x] Create `ScraperRegistry` with decorator-based registration
+- [x] Implement `@registry.register()` decorator for clean scraper registration
+- [x] Add scraper metadata tracking (id, name, version, description)
+- [x] Support explicit scraper selection via `scraper_id` in Job model
+- [x] Update worker to use registry for scraper lookup
+- [x] Add fallback to default scraper when none specified
+
+### 4.2 Scraper Organization ✅
+- [x] Create `src/scrapers/` directory for all custom scrapers
+- [x] Move example scrapers to `src/scrapers/examples.py`
+- [x] Set up scraper package imports for auto-registration
+- [x] Create scraper template and documentation ([SCRAPER_TEMPLATE.md](SCRAPER_TEMPLATE.md))
+- [x] Add README in scrapers directory with usage instructions
+- [x] Fix type annotations for `ScraperError` error types
+
+**Current Registered Scrapers**:
+- `example-mock`: Simple mock scraper for testing
+- `example-http`: HTTP scraper using httpbin.org for testing
+
+## 🔄 Phase 5: Real-World HTTP Scrapers (NEXT)
+
+### 5.1 Property Tax Scraper Template
 - [ ] Research and select a county website for initial implementation
 - [ ] Create concrete HTTP scraper for property tax site
 - [ ] Implement site-specific input validation and data extraction
 - [ ] Handle common property tax site patterns (search forms, result pages)
 - [ ] Add proper error handling for site-specific failures
+- [ ] Test with real property data (10-100 items)
 
-### 3.2 Advanced HTTP Patterns
+### 5.2 Advanced HTTP Patterns
 - [ ] Session management and cookie handling
 - [ ] Form submission and CSRF token handling
 - [ ] Multi-step navigation patterns
 - [ ] Response parsing with BeautifulSoup or similar
 - [ ] PDF download handling for tax documents
 
-## 📋 Phase 4: Result Storage & Status Management
+## 📋 Phase 6: Execution Policy Integration
 
-### 4.1 S3 Result Storage
-- [ ] Create `ResultStorage` interface and S3 implementation
-- [ ] Store scraper results (HTML, data, screenshots) in S3
-- [ ] Generate manifest files for easy result discovery
-- [ ] Implement proper S3 key naming conventions
-- [ ] Add result storage integration to worker loop
+### 6.1 Proxy Configuration
+- [ ] Read `ExecutionPolicy` from Job model
+- [ ] Map `ProxyPolicy` to BrightData proxy URLs (datacenter/residential/web-unlocker)
+- [ ] Pass proxy configuration to scrapers
+- [ ] Test with different proxy types
 
-### 4.2 Job Status Management
-- [ ] Update job item status in DynamoDB after scraping
-- [ ] Track retry counts and error details
-- [ ] Update job-level progress tracking
-- [ ] Implement job completion detection
-- [ ] Add status reporting for monitoring
+### 6.2 Rate Limiting & Timeouts
+- [ ] Implement worker-level rate limiting with token buckets
+- [ ] Apply job-level rate limits from `ThrottlingPolicy`
+- [ ] Apply timeout policies from `TimeoutPolicy`
+- [ ] Add retry policy integration (max retries, backoff strategy)
 
-## 🎭 Phase 5: Playwright Browser Automation
+### 6.3 Circuit Breaker
+- [ ] Implement job-level circuit breakers
+- [ ] Detect consecutive failure patterns
+- [ ] Pause job when circuit breaker trips
+- [ ] Add manual circuit breaker controls via API
 
-### 5.1 BasePlaywrightScraper Framework
+## 🏗️ Phase 7: Manifest Aggregation & Job Finalization
+
+### 7.1 Manifest Generation
+- [ ] Detect when job is complete (all items processed)
+- [ ] Aggregate per-item manifests into consolidated views
+- [ ] Generate `manifests/full.json` with all items
+- [ ] Generate `manifests/success.json` with successful items only
+- [ ] Generate `manifests/errors.json` with failed items only
+- [ ] Generate `job_metadata.json` with summary statistics
+
+### 7.2 Result Access API
+- [ ] Add endpoint: `GET /jobs/{job_id}/results` to download manifest
+- [ ] Add endpoint: `GET /jobs/{job_id}/download` for bulk result download
+- [ ] Support filtering results by status (success/error)
+- [ ] Add pagination for large result sets
+
+## 🎭 Phase 8: Playwright Browser Automation
+
+### 8.1 BasePlaywrightScraper Framework
 - [ ] Create `BasePlaywrightScraper` ABC similar to HTTP version
 - [ ] Implement browser lifecycle management
 - [ ] Add screenshot capture capabilities
 - [ ] Handle browser crashes and timeouts
 - [ ] Implement stealth measures and anti-detection
 
-### 5.2 Browser-Specific Features
+### 8.2 Browser-Specific Features
 - [ ] JavaScript execution and waiting for dynamic content
 - [ ] Complex user interaction simulation (clicks, forms, navigation)
 - [ ] Cookie and session persistence across pages
 - [ ] File download handling
 - [ ] Mobile browser emulation for responsive sites
 
-## 🏗️ Phase 6: Scraper Registry & Selection
+## 🎬 Phase 9: Generic Action Scrapers
 
-### 6.1 Dynamic Scraper Registry
-- [ ] Create `ScraperRegistry` for mapping sites to scrapers
-- [ ] Support configuration-driven scraper selection
-- [ ] Implement auto-discovery of scraper modules
-- [ ] Add scraper validation and health checks
-- [ ] Support scraper-specific configuration
-
-### 6.2 Enhanced Selection Logic
-- [ ] Map job items to scrapers based on `site_key`, `rate_class`, etc.
-- [ ] Support fallback scrapers for failed attempts
-- [ ] Add A/B testing support for scraper variants
-- [ ] Implement scraper performance tracking
-
-## 🛡️ Phase 7: Robustness Features
-
-### 7.1 Rate Limiting & Throttling
-- [ ] Implement worker-level rate limiting with token buckets
-- [ ] Add global rate coordination via Redis
-- [ ] Support per-site rate limit configuration
-- [ ] Implement smart backoff based on site responses
-- [ ] Add proxy rotation and rate distribution
-
-### 7.2 Circuit Breaker System
-- [ ] Implement job-level circuit breakers
-- [ ] Add site-level circuit breakers for systematic failures
-- [ ] Create scraper-level circuit breakers for broken implementations
-- [ ] Add manual circuit breaker controls via API
-- [ ] Implement circuit breaker recovery logic
-
-### 7.3 Enhanced Error Handling
-- [ ] Poison message detection and quarantine
-- [ ] Dead letter queue implementation
-- [ ] Error pattern detection and alerting
-- [ ] Automatic retry escalation (HTTP → Browser → Manual)
-- [ ] Comprehensive error reporting and analytics
-
-## 🎬 Phase 8: Generic Action Scrapers
-
-### 8.1 Action-Based Framework
+### 9.1 Action-Based Framework
 - [ ] Create `BaseActionScraper` for JSON action execution
 - [ ] Implement action parser for Chrome extension recordings
 - [ ] Add action execution engine (clicks, forms, navigation, etc.)
 - [ ] Handle dynamic selectors and element waiting
 - [ ] Add action sequence validation and error recovery
 
-### 8.2 Action Types Implementation
+### 9.2 Action Types Implementation
 - [ ] Navigation actions (goto, back, forward, reload)
 - [ ] Interaction actions (click, type, select, upload)
 - [ ] Wait actions (element, timeout, network idle)
 - [ ] Extraction actions (text, attributes, screenshots)
 - [ ] Conditional actions and control flow
 
-## 🚀 Phase 9: Production Optimization
+## 🚀 Phase 10: Production Optimization
 
-### 9.1 Performance Optimization
+### 10.1 Performance Optimization
 - [ ] Implement batch processing for higher throughput
 - [ ] Add connection pooling and HTTP/2 support
 - [ ] Optimize memory usage and garbage collection
 - [ ] Add worker health metrics and auto-scaling triggers
 - [ ] Implement result caching for duplicate requests
 
-### 9.2 Monitoring & Observability
+### 10.2 Monitoring & Observability
 - [ ] Add comprehensive metrics collection
 - [ ] Implement distributed tracing
 - [ ] Add custom CloudWatch dashboards
 - [ ] Set up alerting for failures and performance issues
 - [ ] Add worker debugging and diagnostic tools
 
-## 🧪 Phase 10: Testing & Validation
+## 🧪 Phase 11: Testing & Validation
 
-### 10.1 Automated Testing
+### 11.1 Automated Testing
 - [ ] Unit tests for all scraper base classes
 - [ ] Integration tests with mock websites
 - [ ] End-to-end testing with real sites
 - [ ] Load testing with high-volume job processing
 - [ ] Chaos testing for failure scenarios
 
-### 10.2 Quality Assurance
+### 11.2 Quality Assurance
 - [ ] Code review guidelines for new scrapers
 - [ ] Scraper certification process
 - [ ] Performance benchmarking suite
 - [ ] Security review for credential handling
 - [ ] Compliance validation for rate limiting
 
+## 🛠️ Phase 12: Developer Experience
+
+### 12.1 CLI Tools
+- [ ] Create CLI for job management (`cli.py`)
+- [ ] Commands: `create-job`, `list-jobs`, `job-status`, `cancel-job`
+- [ ] Local job execution (bypass queue, run items directly)
+- [ ] Import job items from CSV/JSON
+
+### 12.2 Documentation
+- [ ] API documentation with examples
+- [ ] Scraper development guide
+- [ ] Deployment guide for ECS
+- [ ] Troubleshooting guide
+
 ---
 
-## 📍 Current Status: Phase 2 Complete
+## 📍 Current Status: Phase 4 Complete
 
-**Last Completed**: HTTP Scraper Infrastructure (Phase 2.3) ✅
-**Currently Testing**: HTTP scraper with real web requests
-**Next Up**: Real-World HTTP Scrapers (Phase 3.1) - Property Tax Scraper Template
+**Last Completed**: Scraper Registry & Selection (Phase 4.2) ✅
+**Currently**: End-to-end system working with S3 storage and DynamoDB status tracking
+**Next Up**: Real-World HTTP Scrapers (Phase 5.1) - Build first property tax scraper
 
-**Ready for Testing**:
+**Working Features**:
+- ✅ Complete worker loop with SQS integration
+- ✅ HTTP scraper framework with retry/error handling
+- ✅ S3 result storage with compression and manifests
+- ✅ DynamoDB status tracking
+- ✅ Scraper registry with decorator syntax
+- ✅ Local storage option for development
+- ✅ Example scrapers for testing
+
+**Testing**:
 ```bash
-# Test HTTP scraper
+# Create a job with explicit scraper
 curl -X POST http://localhost:8000/jobs \
   -H 'Content-Type: application/json' \
-  -d '{"job_id": "test", "items": [{"item_id": "test-001", "input": {"test_param": "hello"}}]}'
+  -d '{
+    "job_id": "test-001",
+    "scraper_id": "example-http",
+    "items": [
+      {"item_id": "item-1", "input": {"test_param": "hello"}},
+      {"item_id": "item-2", "input": {"test_param": "world"}}
+    ]
+  }'
+
+# Start worker
+python -m src.worker.main
+
+# Use local storage for testing
+export USE_LOCAL_STORAGE=true
+python -m src.worker.main
 ```
 
-The foundation is solid and production-ready. We can now build real scrapers on top of this robust infrastructure.
+**System Architecture**:
+```
+Controller (FastAPI) → SQS Queue → Worker (ECS Tasks)
+     ↓                                ↓
+  DynamoDB ←────────────────────── S3 Storage
+  (Status)                        (Results)
+```
+
+The foundation is solid and production-ready. We can now build real scrapers and add execution policy integration for production-scale scraping.

@@ -12,6 +12,8 @@ from src.worker.scraper import BaseHttpScraper, BaseScraper
 # Import example scrapers
 from src.scrapers.examples import ExampleHttpScraper, ExampleScraper
 
+from src.scrapers.az.maricopa import MaricopaAZHttpScraper
+
 # Import all custom scrapers here as you create them
 # Example:
 # from src.scrapers.travis_county_tx import TravisCountyScraper
@@ -23,4 +25,5 @@ __all__ = [
     'BaseScraper',
     'ExampleHttpScraper',
     'ExampleScraper',
+    'MaricopaAZHttpScraper',
 ]

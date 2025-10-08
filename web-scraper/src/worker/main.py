@@ -6,6 +6,7 @@ from types import FrameType
 from typing import Optional
 
 from src.shared.db import DynamoDBDatabaseService
+from src.shared.interfaces import ResultStorage
 from src.shared.models import ItemMetadata, JobItem, JobItemOutput, StorageKeys
 from src.shared.queue import SqsQueue
 from src.shared.settings import Settings
@@ -24,21 +25,13 @@ class Worker:
     def __init__(self):
         self.settings = Settings()
         self.queue = SqsQueue(self.settings)
-
-        # Choose storage backend based on configuration
-        if self.settings.use_local_storage:
-            logger.info(f"Using local filesystem storage at {self.settings.local_storage_path}")
-            self.storage = LocalFilesystemStorage(self.settings.local_storage_path)
-        else:
-            logger.info(f"Using S3 storage with bucket {self.settings.bucket_name}")
-            self.storage = S3ResultStorage(self.settings)
-
+        self.storage = _get_storage(self.settings)
         self.db = DynamoDBDatabaseService(self.settings)
         self.running = True
 
     async def run(self):
         """Main worker loop that processes messages from SQS."""
-        logger.info('Worker starting up...')
+        logger.info('Worker started and listening for messages...')
 
         # Set up signal handling for graceful shutdown
         signal.signal(signal.SIGTERM, self._signal_handler)
@@ -46,22 +39,18 @@ class Worker:
 
         while self.running:
             try:
-                # Dequeue a single message
                 queue_response = self.queue.dequeue()
 
                 if queue_response is None:
-                    # No messages available, short sleep to prevent tight loop
                     await asyncio.sleep(0.1)
                     continue
 
                 job_item, receipt_handle, message_id = queue_response
 
-                # Process the job item
                 await self._process_job_item(job_item, receipt_handle, message_id)
-
             except Exception as e:
                 logger.exception(f'Unexpected error in worker loop: {e}')
-                # Continue running even if individual message processing fails
+                # continue running even if individual message processing fails
                 await asyncio.sleep(1)
 
         logger.info('Worker shutting down...')
@@ -73,10 +62,7 @@ class Worker:
         message_id: str
     ) -> None:
         """Process a single job item, handling success and error cases."""
-        logger.info(
-            f'Processing job item - Job: {job_item.job_id}, '
-            f'Item: {job_item.item_id}, Status: {job_item.status}'
-        )
+        logger.info(f'Processing job item - Job: {job_item.job_id}, Item: {job_item.item_id}, Status: {job_item.status}')
         logger.debug(f'Job item inputs: {job_item.input}')
 
         started_at = now_iso()
@@ -133,10 +119,8 @@ class Worker:
                 'success'
             )
 
-            # Update DynamoDB with success status and storage keys
-            # Note: We only store references to S3, not the actual data
+            # update db with success status and storage keys
             output = JobItemOutput(
-                extracted_data=None,  # Data is in S3, not DynamoDB
                 screenshot_key=storage_keys.screenshot,
                 storage_keys=storage_keys.model_dump(exclude_none=True)
             )
@@ -148,22 +132,20 @@ class Worker:
                 completed_at=completed_at
             )
 
-            logger.info(f'Updated DynamoDB status to success for {job_item.item_id}')
+            logger.info(f'Updated DB status to success for {job_item.item_id}')
 
-            # Delete the message to prevent reprocessing
+            # delete the message to prevent reprocessing
             self._delete_message(receipt_handle)
-            logger.debug(f'Deleted message {message_id}')
 
+            logger.debug(f'Deleted message {message_id}')
         except ScraperError as e:
             # Scraping failed with a classified error
             completed_at = now_iso()
             duration_ms = int((time.time() - start_time) * 1000)
 
-            logger.error(
-                f'Scraper error for item {job_item.item_id}: {e.error_type} - {e}'
-            )
+            logger.error(f'Scraper error for item {job_item.item_id}: {e.error_type} - {e}')
 
-            # Update DynamoDB with error details
+            # update db with error details
             self.db.update_job_item_error(
                 job_id=job_item.job_id,
                 item_id=job_item.item_id,
@@ -173,21 +155,15 @@ class Worker:
                 last_attempt_at=completed_at
             )
 
-            logger.info(
-                f'Updated DynamoDB with error status for {job_item.item_id}: {e.error_type}'
-            )
+            logger.info(f'Updated DB with error status for {job_item.item_id}: {e.error_type}')
 
-            # For non-retryable errors, delete the message
-            # For retryable errors, let it return to queue (visibility timeout expires)
-            from src.shared.models import JobItem as JobItemModel
-            if not JobItemModel.is_retryable_error(e.error_type):
+            # - for non-retryable errors, delete the message
+            # - for retryable errors, let it return to queue (visibility timeout expires)
+            if not JobItem.is_retryable_error(e.error_type):
                 self._delete_message(receipt_handle)
                 logger.info(f'Deleted message {message_id} (non-retryable error)')
             else:
-                logger.info(
-                    f'Message {message_id} will return to queue for retry '
-                    f'(retryable error: {e.error_type})'
-                )
+                logger.info(f'Message {message_id} will return to queue for retry (retryable error: {e.error_type})')
 
         except Exception as e:
             # Unexpected error
@@ -218,25 +194,16 @@ class Worker:
         # Get job to check for scraper_id
         job = self.db.get_job(job_item.job_id)
 
-        # If job specifies a scraper_id, use it
-        if job.scraper_id:
-            scraper_class = registry.get(job.scraper_id)
-            if scraper_class:
-                logger.debug(f'Using scraper "{job.scraper_id}" for item {job_item.item_id}')
-                return scraper_class()
-            else:
-                logger.error(f'Scraper "{job.scraper_id}" not found in registry')
-                raise ValueError(f'Unknown scraper_id: {job.scraper_id}')
+        if not job.scraper_id:
+            raise ValueError('No scraper_id specified for job')
 
-        # Fallback: Use example-mock scraper as default
-        logger.warning(
-            f'No scraper_id specified for job {job.job_id}, '
-            f'using default "example-mock" scraper'
-        )
-        scraper_class = registry.get('example-mock')
-        if not scraper_class:
-            raise ValueError('Default scraper "example-mock" not found in registry')
-        return scraper_class()
+        scraper_class = registry.get(job.scraper_id)
+        if scraper_class:
+            logger.debug(f'Using scraper "{job.scraper_id}" for item {job_item.item_id}')
+            return scraper_class()
+        else:
+            logger.error(f'Scraper "{job.scraper_id}" not found in registry')
+            raise ValueError(f'Unknown scraper_id: {job.scraper_id}')
 
     def _delete_message(self, receipt_handle: str) -> None:
         """Delete processed message from SQS."""
@@ -253,6 +220,15 @@ class Worker:
         """Handle shutdown signals gracefully."""
         logger.info(f'Received signal {signum}, initiating graceful shutdown...')
         self.running = False
+
+
+def _get_storage(settings: Settings) -> ResultStorage:
+    if settings.use_local_storage:
+        logger.info(f"Using local filesystem storage at {settings.local_storage_path}")
+        return LocalFilesystemStorage(settings.local_storage_path)
+    else:
+        logger.info(f"Using S3 storage with bucket {settings.bucket_name}")
+        return S3ResultStorage(settings)
 
 
 async def main():

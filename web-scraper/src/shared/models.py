@@ -14,9 +14,8 @@ Job models
 """
 
 class JobItemOutput(BaseModel):
-    extracted_data: Optional[dict[str, Any]] = None
     screenshot_key: Optional[str] = None
-    storage_keys: Optional[dict[str, str]] = None  # Keys to stored artifacts in S3/storage
+    storage_keys: Optional[dict[str, str]] = None
 
 
 class JobItem(BaseModel):

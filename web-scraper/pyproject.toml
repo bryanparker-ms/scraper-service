@@ -5,10 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.14.2",
     "boto3>=1.40.31",
     "boto3-stubs[all]>=1.40.31",
     "fastapi[standard]>=0.116.1",
     "httpx>=0.28.1",
     "pydantic>=2.11.9",
     "python-dotenv>=1.1.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=6.30.1",
 ]

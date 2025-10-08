@@ -73,7 +73,17 @@ class BaseHttpScraper(ABC):
                 self.validate_inputs(job_item)
 
                 # Call the concrete scraper implementation
-                result = await self._scrape_implementation(client, job_item)
+                # Wrap to catch httpx exceptions and convert them automatically
+                try:
+                    result = await self.do_scrape(client, job_item)
+                except (HTTPStatusError, TimeoutException, RequestError) as httpx_error:
+                    # Automatically classify and convert httpx exceptions to ScraperError
+                    classified_error = self._classify_error(httpx_error)
+                    raise ScraperError(
+                        f"HTTP error: {httpx_error}",
+                        classified_error,
+                        httpx_error
+                    )
 
                 logger.info(f"Successfully scraped item {job_item.item_id} on attempt {attempt + 1}")
                 return result
@@ -97,18 +107,18 @@ class BaseHttpScraper(ABC):
                 await asyncio.sleep(delay)
 
             except Exception as e:
-                # Classify unexpected errors
+                # Catch any other unexpected errors (not httpx, not ScraperError)
                 last_error = e
-                classified_error = self.classify_error(e)
                 logger.warning(f"Unexpected error on attempt {attempt + 1} for item {job_item.item_id}: {e}")
 
-                # Convert to ScraperError and retry if appropriate
-                scraper_error = ScraperError(str(e), classified_error, e)
+                # Classify as unexpected and convert to ScraperError
+                error_type: RetryableError = "unexpected"
+                scraper_error = ScraperError(str(e), error_type, e)
 
-                if not self._is_retryable_error(classified_error) or attempt >= self.max_retries:
+                if attempt >= self.max_retries:
                     raise scraper_error
 
-                # Wait before retry
+                # Wait before retry for unexpected errors
                 delay = min(self.base_delay * (2 ** attempt), self.max_delay)
                 await asyncio.sleep(delay)
 
@@ -117,27 +127,36 @@ class BaseHttpScraper(ABC):
             if isinstance(last_error, ScraperError):
                 raise last_error
             else:
-                classified_error = self.classify_error(last_error)
+                classified_error = self._classify_error(last_error)
                 raise ScraperError(f"Max retries exceeded: {last_error}", classified_error, last_error)
         else:
             error_type: RetryableError = "unexpected"
             raise ScraperError("Max retries exceeded with unknown error", error_type)
 
     @abstractmethod
-    async def _scrape_implementation(self, client: httpx.AsyncClient, job_item: JobItem) -> ScrapeResult:
+    async def do_scrape(self, client: httpx.AsyncClient, job_item: JobItem) -> ScrapeResult:
         """
-        Concrete implementation of the scraping logic.
+        Implement the scraping logic for this specific scraper.
+
+        This is the method you override to implement your scraping logic.
+        The base class handles all the infrastructure:
+        - HTTP client setup with proxy/timeout config
+        - Automatic retry with exponential backoff
+        - Automatic httpx error classification (timeouts, HTTP errors, network errors)
+        - Logging and error tracking
+
+        Call scrape() from outside, implement do_scrape() inside.
 
         Args:
-            client: Configured httpx client
-            job_item: Job item to process
+            client: Configured httpx client ready to use
+            job_item: Job item with inputs to process
 
         Returns:
-            ScrapeResult: The scraping result
+            ScrapeResult: The scraping result with HTML, extracted data, and optional screenshot
 
         Raises:
-            ScraperError: For expected scraping errors
-            Exception: For unexpected errors (will be classified automatically)
+            ScraperError: For custom business logic errors (e.g., no results found)
+            Any other exception will be automatically classified and converted to ScraperError
         """
         pass
 
@@ -156,23 +175,20 @@ class BaseHttpScraper(ABC):
             headers = self.config.get('headers', {})
 
             # Add proxy if configured
-            proxies = None
+            proxy = None
             if 'proxy_url' in self.config:
-                proxies = {
-                    'http://': self.config['proxy_url'],
-                    'https://': self.config['proxy_url']
-                }
+                proxy = self.config['proxy_url']
 
             self._client = httpx.AsyncClient(
                 timeout=timeout,
                 headers=headers,
-                proxies=proxies,
+                proxy=proxy,
                 follow_redirects=True
             )
 
         return self._client
 
-    def classify_error(self, error: Exception) -> Union[RetryableError, NonRetryableError]:
+    def _classify_error(self, error: Exception) -> Union[RetryableError, NonRetryableError]:
         """
         Classify an exception into retryable or non-retryable error types.
         """

@@ -45,7 +45,7 @@ class YourScraperName(BaseHttpScraper):
                     "invalid_input"
                 )
 
-    async def do_scrape(
+    async def _execute(
         self,
         client: httpx.AsyncClient,
         job_item: JobItem

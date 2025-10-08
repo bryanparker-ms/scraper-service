@@ -41,6 +41,9 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
     if request.job_name:
         job.job_name = request.job_name
 
+    if request.scraper_id:
+        job.scraper_id = request.scraper_id
+
     db.create_job_if_not_exists(job)
 
     queue_entries: list[JobItem] = []
