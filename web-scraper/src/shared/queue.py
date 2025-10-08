@@ -59,6 +59,17 @@ class SqsQueue(QueueService):
 
             return None
 
+    def get_length(self) -> int:
+        resp = self.sqs_client.get_queue_attributes(
+            QueueUrl=self.settings.queue_url,
+            AttributeNames=['ApproximateNumberOfMessages']
+        )
+        return int(resp['Attributes']['ApproximateNumberOfMessages'])
+
+    def purge(self) -> None:
+        """Purge the queue of all messages"""
+        self.sqs_client.purge_queue(QueueUrl=self.settings.queue_url)
+
     def __create_sqs_client(self, settings: Settings) -> SQSClient:
         return boto3.client('sqs', region_name=settings.aws_region, config=settings.boto_config)
 

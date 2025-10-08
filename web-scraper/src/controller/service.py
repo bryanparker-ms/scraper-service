@@ -46,26 +46,20 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
 
     db.create_job_if_not_exists(job)
 
-    queue_entries: list[JobItem] = []
-
+    # Create job items with status='pending'
+    # The scheduler will pick these up and push to SQS at the configured rate
     for item in request.items:
         job_item = JobItem(
             job_id=job_id,
             item_id=item.item_id,
             input=item.input,
-            status='queued'
+            status='pending',  # Pending = in DynamoDB, waiting for scheduler
+            retry_count=0
         )
 
         db.create_job_item(job_id, job_item)
-        queue_entries.append(job_item)
 
-        if len(queue_entries) == 10:
-            queue.enqueue(queue_entries)
-            queue_entries = []
-
-    if queue_entries:
-        queue.enqueue(queue_entries)
-
+    # No SQS push here! Scheduler handles rate-limited queueing
     return CreateJobResponse(job_id=job_id, seeded_count=len(request.items))
 
 
@@ -76,3 +70,13 @@ def get_job_status(job_id: str) -> JobStatusResponse | ErrorResponse:
     job = db.get_job(job_id)
 
     return JobStatusResponse(status=job.status, summary=db.get_job_status(job_id))
+
+
+def get_queue_length() -> int:
+    return queue.get_length()
+
+
+def purge_queue() -> None:
+    queue.purge()
+
+    return None

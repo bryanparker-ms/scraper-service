@@ -15,8 +15,8 @@ from src.shared.utils import now_iso
 from src.worker.registry import registry
 from src.worker.scraper import BaseScraper, ScraperError
 
-# Import scrapers package to register all scrapers
-import src.scrapers  # noqa: F401
+# import scrapers package to register all scrapers
+import src.scrapers  # type:ignore
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,10 @@ class Worker:
         self.running = True
 
     async def run(self):
-        """Main worker loop that processes messages from SQS."""
+        """Worker loop that processes job items from the queue"""
         logger.info('Worker started and listening for messages...')
 
-        # Set up signal handling for graceful shutdown
+        # graceful shutdown signals
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
 
@@ -61,15 +61,17 @@ class Worker:
         receipt_handle: str,
         message_id: str
     ) -> None:
-        """Process a single job item, handling success and error cases."""
         logger.info(f'Processing job item - Job: {job_item.job_id}, Item: {job_item.item_id}, Status: {job_item.status}')
         logger.debug(f'Job item inputs: {job_item.input}')
+
+        # Update status: queued -> in_progress
+        self.db.update_item_status(job_item.job_id, job_item.item_id, 'in_progress')
 
         started_at = now_iso()
         start_time = time.time()
 
         try:
-            # Get scraper and process the item
+            # try to get a scraper for the job item. if a scraper is not found, a ValueError will be raised
             scraper = self._get_scraper_for_item(job_item)
             result = await scraper.scrape(job_item)
 
@@ -84,7 +86,7 @@ class Worker:
                 f'Duration: {duration_ms}ms'
             )
 
-            # Build metadata for storage
+            # metadata about the job item
             metadata = ItemMetadata(
                 job_id=job_item.job_id,
                 item_id=job_item.item_id,
@@ -97,7 +99,7 @@ class Worker:
                 storage_keys=StorageKeys(),  # Will be populated by storage
             )
 
-            # Store result artifacts in S3
+            # pointers to the stored artifacts. stored in the manifest and back in the DB
             storage_keys = await self.storage.store_result(
                 job_item,
                 result,
@@ -111,7 +113,6 @@ class Worker:
                 f'Screenshot={bool(storage_keys.screenshot)}'
             )
 
-            # Update manifest with completed item
             await self.storage.update_manifest(
                 job_item.job_id,
                 job_item.item_id,
@@ -139,7 +140,7 @@ class Worker:
 
             logger.debug(f'Deleted message {message_id}')
         except ScraperError as e:
-            # Scraping failed with a classified error
+            # scraping failed. let's see if we should retry
             completed_at = now_iso()
             duration_ms = int((time.time() - start_time) * 1000)
 
@@ -157,8 +158,10 @@ class Worker:
 
             logger.info(f'Updated DB with error status for {job_item.item_id}: {e.error_type}')
 
-            # - for non-retryable errors, delete the message
-            # - for retryable errors, let it return to queue (visibility timeout expires)
+
+            # determine if the error is retryable or not:
+            #   - for non-retryable errors, delete the message
+            #   - for retryable errors, let it return to queue (visibility timeout expires)
             if not JobItem.is_retryable_error(e.error_type):
                 self._delete_message(receipt_handle)
                 logger.info(f'Deleted message {message_id} (non-retryable error)')
@@ -166,12 +169,12 @@ class Worker:
                 logger.info(f'Message {message_id} will return to queue for retry (retryable error: {e.error_type})')
 
         except Exception as e:
-            # Unexpected error
+            # oops... this isn't expected. report it and try again (maybe we shouldn't try unexpected errors again)
             completed_at = now_iso()
 
             logger.exception(f'Unexpected error processing item {job_item.item_id}: {e}')
 
-            # Update DynamoDB with unexpected error
+            # log the error back to the DB
             self.db.update_job_item_error(
                 job_id=job_item.job_id,
                 item_id=job_item.item_id,
@@ -181,17 +184,11 @@ class Worker:
                 last_attempt_at=completed_at
             )
 
-            logger.info(f'Updated DynamoDB with unexpected error for {job_item.item_id}')
-
-            # Let message return to queue for retry
-            logger.info(f'Message {message_id} will return to queue for retry')
-
     def _get_scraper_for_item(self, job_item: JobItem) -> BaseScraper:
         """
-        Select the appropriate scraper for the given job item.
-        Looks up scraper_id from the job in the registry.
+        Select the appropriate scraper for the given job item. Looks up scraper_id from the job in in the registry and returns an instance. If the scraper is not found, a ValueError will be raised.
         """
-        # Get job to check for scraper_id
+        # fetch the job to get the scraper_id and execution_policy
         job = self.db.get_job(job_item.job_id)
 
         if not job.scraper_id:
@@ -200,13 +197,13 @@ class Worker:
         scraper_class = registry.get(job.scraper_id)
         if scraper_class:
             logger.debug(f'Using scraper "{job.scraper_id}" for item {job_item.item_id}')
-            return scraper_class()
+            return scraper_class(execution_policy=job.execution_policy)
         else:
             logger.error(f'Scraper "{job.scraper_id}" not found in registry')
             raise ValueError(f'Unknown scraper_id: {job.scraper_id}')
 
     def _delete_message(self, receipt_handle: str) -> None:
-        """Delete processed message from SQS."""
+        """Delete the processed message from the queue"""
         try:
             self.queue.sqs_client.delete_message(
                 QueueUrl=self.settings.queue_url,
@@ -214,25 +211,24 @@ class Worker:
             )
         except Exception as e:
             logger.error(f'Failed to delete message: {e}')
-            # Don't raise - we don't want to crash the worker over cleanup failures
+            # don't raise - we don't want to crash the worker over cleanup failures
 
     def _signal_handler(self, signum: int, frame: Optional[FrameType]) -> None:
-        """Handle shutdown signals gracefully."""
+        """Handle graceful shutdown"""
         logger.info(f'Received signal {signum}, initiating graceful shutdown...')
         self.running = False
 
 
 def _get_storage(settings: Settings) -> ResultStorage:
     if settings.use_local_storage:
-        logger.info(f"Using local filesystem storage at {settings.local_storage_path}")
+        logger.info(f'Using local filesystem storage at {settings.local_storage_path}')
         return LocalFilesystemStorage(settings.local_storage_path)
     else:
-        logger.info(f"Using S3 storage with bucket {settings.bucket_name}")
+        logger.info(f'Using S3 storage with bucket {settings.bucket_name}')
         return S3ResultStorage(settings)
 
 
 async def main():
-    # Configure logging
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'

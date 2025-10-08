@@ -58,6 +58,12 @@ class QueueService(Protocol):
     def dequeue(self) -> Optional[QueueResponse]:
         ...
 
+    def get_length(self) -> int:
+        ...
+
+    def purge(self) -> None:
+        ...
+
 
 class ResultStorage(Protocol):
     """Generic interface for storing scrape results."""

@@ -7,7 +7,7 @@ RetryableError = Literal['timeout', 'server_error', 'network_error', 'proxy_erro
 NonRetryableError = Literal['no_results', 'not_found', 'invalid_input']
 
 JobStatus = Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']
-JobItemStatus = Literal['queued', 'in_progress', 'success', 'error', 'retrying']
+JobItemStatus = Literal['pending', 'queued', 'in_progress', 'success', 'error', 'retrying']
 
 """
 Job models
@@ -21,7 +21,7 @@ class JobItemOutput(BaseModel):
 class JobItem(BaseModel):
     job_id: str
     item_id: str
-    status: JobItemStatus = 'queued'
+    status: JobItemStatus = 'pending'  # Default: pending (in DynamoDB, waiting for scheduler)
     input: dict[str, Any]
     output: Optional[JobItemOutput] = None
     error_type: Optional[RetryableError | NonRetryableError] = None

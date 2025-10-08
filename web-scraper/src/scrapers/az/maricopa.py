@@ -1,9 +1,8 @@
 import asyncio
 from typing import Any
-from bs4 import BeautifulSoup, Tag
 import httpx
 
-from src.shared.models import JobItem
+from src.shared.models import ExecutionPolicy, JobItem
 from src.worker.models import ScrapeResult
 from src.worker.registry import registry
 from src.worker.scraper import BaseHttpScraper, ScraperError
@@ -16,9 +15,9 @@ from src.worker.scraper import BaseHttpScraper, ScraperError
     description='Maricopa County, AZ scraper'
 )
 class MaricopaAZHttpScraper(BaseHttpScraper):
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, execution_policy: ExecutionPolicy | None = None):
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari'}
-        super().__init__({'headers': headers, **(config or {})})
+        super().__init__({'headers': headers, **(config or {})}, execution_policy=execution_policy)
 
     def validate_inputs(self, job_item: JobItem) -> None:
         if 'parcel_number' not in job_item.input:
@@ -33,35 +32,47 @@ class MaricopaAZHttpScraper(BaseHttpScraper):
         await asyncio.sleep(0.5)
 
         resp = await client.get(f'https://treasurer.maricopa.gov/Parcel/DetailedTaxStatement.aspx')
-        soup = BeautifulSoup(resp.text, 'html.parser')
         resp.raise_for_status()
 
         html_content = resp.text
 
-        owner_el = soup.select_one('#cphMainContent_cphRightColumn_dtlTaxBill_ParcelNASitusLegal_lblNameAddress div')
-        address_el = soup.select_one('#cphMainContent_cphRightColumn_dtlTaxBill_ParcelNASitusLegal_lblSitusAddress')
-        total_tax_el = soup.select_one('#cphMainContent_cphRightColumn_dtlTaxBill_lblGrandTotalCurrentYear')
-        header_el = soup.select_one('#siteInnerContentContainer .rightColumn .panel-header h3')
-        parcel_number_el = soup.select_one('.parcel-num')
+        # Validate we got the right page (catch error pages early)
+        self.assert_html_not_contains(html_content, 'No records found', 'Invalid parcel number format')
+        self.assert_html_contains(html_content, 'Detailed Tax Statement', 'Did not reach tax statement page')
 
+        # Parse HTML
+        soup = self.parse_html(html_content)
+
+        # Extract data using utilities
         extracted_data = {
-            'owner_and_address': self._extract_text(owner_el),
-            'address': self._extract_text(address_el),
-            'total_tax': total_tax_el.text.strip() if total_tax_el else None,
-            'header': header_el.text.strip() if header_el else None,
-            'parcel_number': parcel_number_el.text.strip() if parcel_number_el else None,
+            'owner_and_address': self.extract_text_by_selector(
+                soup,
+                '#cphMainContent_cphRightColumn_dtlTaxBill_ParcelNASitusLegal_lblNameAddress div',
+                replace_br=True
+            ),
+            'address': self.extract_text_by_selector(
+                soup,
+                '#cphMainContent_cphRightColumn_dtlTaxBill_ParcelNASitusLegal_lblSitusAddress'
+            ),
+            'total_tax': self.extract_text_by_selector(
+                soup,
+                '#cphMainContent_cphRightColumn_dtlTaxBill_lblGrandTotalCurrentYear'
+            ),
+            'header': self.extract_text_by_selector(
+                soup,
+                '#siteInnerContentContainer .rightColumn .panel-header h3'
+            ),
+            'parcel_number': self.extract_text_by_selector(
+                soup,
+                '.parcel-num',
+                required=True  # This should always be present
+            ),
         }
+
+        # Validate required fields are present
+        self.assert_fields_present(extracted_data, ['parcel_number', 'total_tax'])
 
         return ScrapeResult(
             html=html_content,
             data=extracted_data,
         )
-
-    def _extract_text(self, el: Tag | None) -> str | None:
-        if not el:
-            return None
-
-        for br in el.find_all('br'):
-            br.replace_with('\n')
-
-        return el.text.strip()

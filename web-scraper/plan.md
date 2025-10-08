@@ -102,36 +102,47 @@ Build a robust, scalable web scraping worker system that can:
 - `example-mock`: Simple mock scraper for testing
 - `example-http`: HTTP scraper using httpbin.org for testing
 
-## 🔄 Phase 5: Real-World HTTP Scrapers (NEXT)
+## ✅ Phase 5: Real-World HTTP Scrapers (COMPLETED)
 
-### 5.1 Property Tax Scraper Template
-- [ ] Research and select a county website for initial implementation
-- [ ] Create concrete HTTP scraper for property tax site
-- [ ] Implement site-specific input validation and data extraction
-- [ ] Handle common property tax site patterns (search forms, result pages)
-- [ ] Add proper error handling for site-specific failures
-- [ ] Test with real property data (10-100 items)
+### 5.1 Property Tax Scraper - Maricopa County, AZ ✅
+- [x] Created production scraper for Maricopa County Treasurer site
+- [x] Implemented site-specific input validation and data extraction
+- [x] Handled multi-step navigation (parcel lookup → tax statement)
+- [x] Added BeautifulSoup parsing with helper utilities
+- [x] Tested with real property data - working end-to-end!
 
-### 5.2 Advanced HTTP Patterns
-- [ ] Session management and cookie handling
-- [ ] Form submission and CSRF token handling
-- [ ] Multi-step navigation patterns
-- [ ] Response parsing with BeautifulSoup or similar
-- [ ] PDF download handling for tax documents
+### 5.2 Scraper Utilities & Validation ✅
+- [x] Added HTML parsing utilities (`parse_html`, `select_one`, `extract_text`)
+- [x] Created validation utilities (`assert_html_contains`, `assert_fields_present`)
+- [x] Implemented hybrid validation (inline + post-scrape `validate_result` hook)
+- [x] Simplified scraper code by pushing common patterns to base class
+- [x] Added sanity checks to catch silent failures (e.g., error pages)
 
-## 📋 Phase 6: Execution Policy Integration
+**Current Registered Scrapers**:
+- `example-mock`: Simple mock scraper for testing
+- `example-http`: HTTP scraper using httpbin.org for testing
+- `maricopa-az`: Production scraper for Maricopa County, AZ property tax data ✅
 
-### 6.1 Proxy Configuration
-- [ ] Read `ExecutionPolicy` from Job model
-- [ ] Map `ProxyPolicy` to BrightData proxy URLs (datacenter/residential/web-unlocker)
-- [ ] Pass proxy configuration to scrapers
-- [ ] Test with different proxy types
+## ✅ Phase 6: Execution Policy Integration (COMPLETED)
 
-### 6.2 Rate Limiting & Timeouts
+### 6.1 Proxy Configuration ✅
+- [x] Read `ExecutionPolicy` from Job model in worker
+- [x] Map `ProxyPolicy` to BrightData proxy URLs (datacenter/residential/web-unlocker)
+- [x] Pass proxy configuration to scrapers via ExecutionPolicy
+- [x] Implement geo-targeting for residential proxies (state/city)
+- [x] Handle proxy type restrictions (datacenter=country only, residential=state/city)
+- [x] Add validation and warnings for unsupported geo-targeting
+- [x] Tested with datacenter and residential proxy types
+
+### 6.2 Timeouts & Retries ✅
+- [x] Apply timeout policies from `TimeoutPolicy` (connect + request timeouts)
+- [x] Add retry policy integration (max retries, backoff strategy, backoff factor)
+- [x] Implement configurable backoff strategies (linear/exponential)
+- [x] Pass ExecutionPolicy through: Job → Worker → Scraper → httpx client
+
+### 6.3 Rate Limiting & Circuit Breaker (DEFERRED)
 - [ ] Implement worker-level rate limiting with token buckets
 - [ ] Apply job-level rate limits from `ThrottlingPolicy`
-- [ ] Apply timeout policies from `TimeoutPolicy`
-- [ ] Add retry policy integration (max retries, backoff strategy)
 
 ### 6.3 Circuit Breaker
 - [ ] Implement job-level circuit breakers
@@ -235,11 +246,11 @@ Build a robust, scalable web scraping worker system that can:
 
 ---
 
-## 📍 Current Status: Phase 4 Complete
+## 📍 Current Status: Phase 6 Complete
 
-**Last Completed**: Scraper Registry & Selection (Phase 4.2) ✅
-**Currently**: End-to-end system working with S3 storage and DynamoDB status tracking
-**Next Up**: Real-World HTTP Scrapers (Phase 5.1) - Build first property tax scraper
+**Last Completed**: ExecutionPolicy Integration (Phase 6.2) ✅
+**Currently**: Production-ready system with real scraper, proxies, and full ExecutionPolicy support
+**Next Up**: Rate Limiting (Phase 6.3) or Manifest Aggregation (Phase 7)
 
 **Working Features**:
 - ✅ Complete worker loop with SQS integration
@@ -248,7 +259,12 @@ Build a robust, scalable web scraping worker system that can:
 - ✅ DynamoDB status tracking
 - ✅ Scraper registry with decorator syntax
 - ✅ Local storage option for development
-- ✅ Example scrapers for testing
+- ✅ Production Maricopa County scraper working end-to-end
+- ✅ ExecutionPolicy integration (proxy, timeout, retry policies)
+- ✅ BrightData proxy support (datacenter/residential/web-unlocker)
+- ✅ Geo-targeting for residential proxies
+- ✅ HTML parsing and validation utilities
+- ✅ Hybrid validation framework (inline + post-scrape)
 
 **Testing**:
 ```bash

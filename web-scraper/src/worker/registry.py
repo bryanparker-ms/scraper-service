@@ -1,12 +1,11 @@
 """
 Scraper registry for managing and selecting scrapers.
 
-Simple class-based registry that maps scraper IDs to scraper classes.
-Uses decorator syntax for easy registration.
+Simple class-based registry that maps scraper IDs to scraper classes. Uses decorator syntax for easy registration.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Type
+from typing import Type
 
 from src.worker.scraper import BaseScraper
 
@@ -17,7 +16,7 @@ class ScraperMetadata:
     scraper_id: str
     name: str
     version: str = '1.0.0'
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class ScraperRegistry:
@@ -36,7 +35,7 @@ class ScraperRegistry:
         scraper_id: str,
         name: str,
         version: str = '1.0.0',
-        description: Optional[str] = None
+        description: str | None = None
     ):
         """
         Decorator to register a scraper class.
@@ -61,13 +60,13 @@ class ScraperRegistry:
             return scraper_class
         return decorator
 
-    def get(self, scraper_id: str) -> Optional[Type[BaseScraper]]:
+    def get(self, scraper_id: str) -> Type[BaseScraper] | None:
         """Get scraper class by ID."""
         if scraper_id in self._scrapers:
             return self._scrapers[scraper_id][0]
         return None
 
-    def get_metadata(self, scraper_id: str) -> Optional[ScraperMetadata]:
+    def get_metadata(self, scraper_id: str) -> ScraperMetadata | None:
         """Get metadata for a scraper."""
         if scraper_id in self._scrapers:
             return self._scrapers[scraper_id][1]

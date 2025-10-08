@@ -1,9 +1,13 @@
 import os
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 from dotenv import load_dotenv
 from botocore.config import Config as BotoConfig
 from pydantic import BaseModel, Field
 
+class ProxyConfig(TypedDict):
+    proxy_url: str
+    proxy_username: str
+    proxy_password: str
 
 class Settings(BaseModel):
     aws_region: str = Field(default='us-east-1')
@@ -31,22 +35,47 @@ class Settings(BaseModel):
         self.use_local_storage = get('USE_LOCAL_STORAGE', 'false').lower() == 'true'
         self.local_storage_path = get('LOCAL_STORAGE_PATH', './storage')
 
-    def proxy_config(self, proxy_type: Literal['datacenter', 'residential', 'web-unlocker']) -> dict[str, str]:
-        proxy_url = get_or_throw(f'PROXY_URL')
-        datacenter_password = get_or_throw(f'PROXY_DATACENTER_PASSWORD')
-        residential_password = get_or_throw(f'PROXY_RESIDENTIAL_PASSWORD')
-        web_unlocker_password = get_or_throw(f'PROXY_WEB_UNLOCKER_PASSWORD')
+    def proxy_config(self, proxy_type: Literal['datacenter', 'residential', 'web-unlocker']) -> ProxyConfig:
+        """
+        Get proxy configuration for the specified proxy type.
 
-        if proxy_type == 'datacenter':
-            proxy_password = datacenter_password
-        elif proxy_type == 'residential':
-            proxy_password = residential_password
-        elif proxy_type == 'web-unlocker':
-            proxy_password = web_unlocker_password
+        Args:
+            proxy_type: Type of proxy (datacenter, residential, web-unlocker)
+
+        Returns:
+            Dict with proxy_url (host:port), proxy_username, proxy_password
+
+        Raises:
+            ValueError: If proxy credentials are not configured in environment
+        """
+        # Check that base proxy URL is configured
+        try:
+            proxy_url = get_or_throw('PROXY_URL')
+        except ValueError as e:
+            raise ValueError(f'Proxy requested but PROXY_URL not configured in environment: {e}')
+
+        # Map proxy type to environment variable names
+        env_mappings = {
+            'datacenter': ('PROXY_DATACENTER_USER', 'PROXY_DATACENTER_PASSWORD'),
+            'residential': ('PROXY_RESIDENTIAL_USER', 'PROXY_RESIDENTIAL_PASSWORD'),
+            'web-unlocker': ('PROXY_WEB_UNLOCKER_USER', 'PROXY_WEB_UNLOCKER_PASSWORD'),
+        }
+
+        if proxy_type not in env_mappings:
+            raise ValueError(f'Unknown proxy type: {proxy_type}')
+
+        user_key, pass_key = env_mappings[proxy_type]
+
+        # Get credentials for the specific proxy type
+        try:
+            proxy_username = get_or_throw(user_key)
+            proxy_password = get_or_throw(pass_key)
+        except ValueError as e:
+            raise ValueError(f'Proxy type "{proxy_type}" requested but credentials not configured: {e}')
 
         return {
             'proxy_url': proxy_url,
-            # 'proxy_username': datacenter_username,
+            'proxy_username': proxy_username,
             'proxy_password': proxy_password,
         }
 
@@ -56,9 +85,6 @@ class Settings(BaseModel):
             region_name=self.aws_region,
             retries={'max_attempts': 5, 'mode': 'standard'},
         )
-
-
-
 
 
 def get(key: str, default: str = '') -> str:

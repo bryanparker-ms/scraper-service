@@ -247,6 +247,101 @@ class DynamoDBDatabaseService(DatabaseService):
             })
         )
 
+    def get_active_jobs(self) -> list[Job]:
+        """
+        Get all jobs that have queued items (for scheduler).
+
+        Returns jobs that are not yet completed.
+        """
+        jobs: list[Job] = []
+        start_key: Mapping[str, AttributeValueTypeDef] = {}
+
+        while True:
+            scan_params: dict[str, Any] = {
+                'TableName': self.settings.table_name,
+                'FilterExpression': '#type = :type AND #sk = :sk AND attribute_exists(#status) AND #status <> :completed',
+                'ExpressionAttributeNames': {
+                    '#type': 'type',
+                    '#sk': 'sk',
+                    '#status': 'status'
+                },
+                'ExpressionAttributeValues': {
+                    ':type': {'S': 'job'},
+                    ':sk': {'S': 'META'},
+                    ':completed': {'S': 'completed'}
+                },
+                'Limit': self.settings.ddb_page_limit,
+                'ConsistentRead': False,
+            }
+
+            if start_key:
+                scan_params['ExclusiveStartKey'] = start_key
+
+            resp = self.ddb_client.scan(**scan_params)
+
+            for item in resp['Items']:
+                jobs.append(Job.model_validate(_from_ddb_item(item)))
+
+            if 'LastEvaluatedKey' not in resp:
+                break
+
+            start_key = resp['LastEvaluatedKey']
+
+        return jobs
+
+    def get_next_pending_item(self, job_id: str) -> JobItem | None:
+        """
+        Get next pending item for a job (for scheduler).
+
+        Returns the first item with status='pending'.
+        """
+        resp = self.ddb_client.query(
+            TableName=self.settings.table_name,
+            KeyConditionExpression='pk = :pk AND begins_with(sk, :sk_prefix)',
+            FilterExpression='#status = :status',
+            ExpressionAttributeNames={
+                '#status': 'status'
+            },
+            ExpressionAttributeValues={
+                ':pk': {'S': job_pk(job_id)},
+                ':sk_prefix': {'S': 'item#'},
+                ':status': {'S': 'pending'}
+            },
+            Limit=1,
+            ConsistentRead=True
+        )
+
+        items = resp.get('Items', [])
+        if items:
+            return JobItem.model_validate(_from_ddb_item(items[0]))
+        return None
+
+    def update_item_status(self, job_id: str, item_id: str, status: JobItemStatus) -> None:
+        """
+        Update item status (for scheduler: pending -> queued).
+
+        Args:
+            job_id: Job ID
+            item_id: Item ID
+            status: New status
+        """
+        self.ddb_client.update_item(
+            TableName=self.settings.table_name,
+            Key={
+                'pk': {'S': job_pk(job_id)},
+                'sk': {'S': item_sk(item_id)}
+            },
+            UpdateExpression='SET #status = :status, #updated_at = :updated_at',
+            ExpressionAttributeNames={
+                '#status': 'status',
+                '#updated_at': 'updated_at'
+            },
+            ExpressionAttributeValues=_to_ddb_item({
+                ':status': status,
+                ':updated_at': now_iso()
+            })
+        )
+
     def __create_ddb_client(self, settings: Settings) -> DynamoDBClient:
         return boto3.client(
             'dynamodb',
