@@ -18,6 +18,12 @@ scheduler = JobScheduler(settings)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan - start/stop background tasks"""
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
     # Startup: Start scheduler as background task
     logger.info("Starting scheduler background task")
     scheduler_task = asyncio.create_task(scheduler.start())

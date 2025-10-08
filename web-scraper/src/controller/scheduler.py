@@ -65,14 +65,22 @@ class JobScheduler:
     centralized rate limiting without requiring a separate deployment.
     """
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, poll_interval_seconds: float = 1.0):
+        """
+        Initialize the job scheduler.
+
+        Args:
+            settings: Application settings
+            poll_interval_seconds: How often to check for pending items (default: 1.0 second)
+        """
         self.settings = settings
         self.db = DynamoDBDatabaseService(settings)
         self.queue = SqsQueue(settings)
         self.rate_limiters: Dict[str, TokenBucket] = {}
         self.running = False
+        self.poll_interval = poll_interval_seconds
 
-        logger.info("JobScheduler initialized")
+        logger.info(f"JobScheduler initialized (poll interval: {poll_interval_seconds}s)")
 
     async def start(self):
         """Start the scheduler background task"""
@@ -83,10 +91,10 @@ class JobScheduler:
         while self.running:
             try:
                 await self.schedule_cycle()
-                await asyncio.sleep(0.1)  # 10 Hz - check every 100ms
+                await asyncio.sleep(self.poll_interval)
             except Exception as e:
                 logger.error(f"Scheduler error: {e}", exc_info=True)
-                await asyncio.sleep(1)  # Back off on error
+                await asyncio.sleep(self.poll_interval)  # Back off on error
 
         logger.info("Job scheduler loop stopped")
 
@@ -198,4 +206,4 @@ class JobScheduler:
                 removed += 1
 
         if removed > 0:
-            logger.info(f"Cleaned up {removed} rate limiter(s) for finished jobs")
+            logger.info(f'Cleaned up {removed} rate limiter(s) for finished jobs')
