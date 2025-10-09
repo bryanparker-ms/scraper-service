@@ -7,7 +7,7 @@ from mypy_boto3_dynamodb.client import DynamoDBClient
 from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 from src.controller.errors import JobNotFound
 from src.shared.interfaces import DatabaseService
-from src.shared.models import Job, JobItem, JobItemOutput, JobItemStatus, JobItemSummary, RetryableError, NonRetryableError
+from src.shared.models import Job, JobItem, JobItemOutput, JobItemStatus, JobItemSummary, JobStatus, RetryableError, NonRetryableError
 from src.shared.settings import Settings
 from src.shared.utils import item_sk, job_pk, now_iso
 
@@ -330,6 +330,105 @@ class DynamoDBDatabaseService(DatabaseService):
             Key={
                 'pk': {'S': job_pk(job_id)},
                 'sk': {'S': item_sk(item_id)}
+            },
+            UpdateExpression='SET #status = :status, #updated_at = :updated_at',
+            ExpressionAttributeNames={
+                '#status': 'status',
+                '#updated_at': 'updated_at'
+            },
+            ExpressionAttributeValues=_to_ddb_item({
+                ':status': status,
+                ':updated_at': now_iso()
+            })
+        )
+
+    def get_job_failure_metrics(self, job_id: str) -> dict[str, int]:
+        """
+        Get failure metrics for circuit breaker.
+
+        Query items with status in ('success', 'error', 'retrying') to calculate:
+        - success_count: Number of successful items
+        - error_count: Number of failed items (error + retrying)
+        - consecutive_errors: Consecutive errors from most recent items
+
+        Returns:
+            Dict with success_count, error_count, consecutive_errors
+        """
+        # Query all completed items for this job
+        items: list[dict[str, Any]] = []
+        start_key: Mapping[str, AttributeValueTypeDef] = {}
+
+        while True:
+            query_params: dict[str, Any] = {
+                'TableName': self.settings.table_name,
+                'KeyConditionExpression': 'pk = :pk AND begins_with(sk, :sk_prefix)',
+                'FilterExpression': '#status IN (:success, :error, :retrying)',
+                'ExpressionAttributeNames': {
+                    '#status': 'status'
+                },
+                'ExpressionAttributeValues': {
+                    ':pk': {'S': job_pk(job_id)},
+                    ':sk_prefix': {'S': 'item#'},
+                    ':success': {'S': 'success'},
+                    ':error': {'S': 'error'},
+                    ':retrying': {'S': 'retrying'}
+                },
+                'ConsistentRead': True,
+            }
+
+            if start_key:
+                query_params['ExclusiveStartKey'] = start_key
+
+            resp = self.ddb_client.query(**query_params)
+
+            for item in resp.get('Items', []):
+                deserialized = _from_ddb_item(item)
+                items.append(deserialized)
+
+            if 'LastEvaluatedKey' not in resp:
+                break
+
+            start_key = resp['LastEvaluatedKey']
+
+        # Count successes and errors
+        success_count = sum(1 for item in items if item.get('status') == 'success')
+        error_count = sum(1 for item in items if item.get('status') in ('error', 'retrying'))
+
+        # Sort by last_attempt_at to get chronological order (most recent last)
+        # Items without last_attempt_at go to beginning
+        sorted_items = sorted(
+            items,
+            key=lambda x: x.get('last_attempt_at', '1970-01-01T00:00:00Z')
+        )
+
+        # Count consecutive errors from the end (most recent)
+        consecutive_errors = 0
+        for item in reversed(sorted_items):
+            if item.get('status') in ('error', 'retrying'):
+                consecutive_errors += 1
+            elif item.get('status') == 'success':
+                # Hit a success, stop counting
+                break
+
+        return {
+            'success_count': success_count,
+            'error_count': error_count,
+            'consecutive_errors': consecutive_errors
+        }
+
+    def update_job_status(self, job_id: str, status: JobStatus) -> None:
+        """
+        Update job status.
+
+        Args:
+            job_id: Job ID
+            status: New status
+        """
+        self.ddb_client.update_item(
+            TableName=self.settings.table_name,
+            Key={
+                'pk': {'S': job_pk(job_id)},
+                'sk': {'S': 'META'}
             },
             UpdateExpression='SET #status = :status, #updated_at = :updated_at',
             ExpressionAttributeNames={

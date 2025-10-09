@@ -48,6 +48,28 @@ class DatabaseService(Protocol):
         """Retrieve a specific job item."""
         ...
 
+    def get_job_failure_metrics(self, job_id: str) -> dict[str, int]:
+        """
+        Get failure metrics for circuit breaker.
+
+        Returns:
+            Dict with keys:
+            - success_count: Number of successful items
+            - error_count: Number of failed items
+            - consecutive_errors: Number of consecutive errors from most recent items
+        """
+        ...
+
+    def update_job_status(self, job_id: str, status: Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']) -> None:
+        """
+        Update job status.
+
+        Args:
+            job_id: Job ID
+            status: New status
+        """
+        ...
+
 
 QueueResponse = Tuple[JobItem, str, str]
 
