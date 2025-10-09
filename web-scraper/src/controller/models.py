@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Any, Optional
 
-from src.shared.models import ExecutionPolicy, JobItem, JobItemSummary, JobStatus
+from src.shared.models import ExecutionPolicy, JobItemSummary, JobStatus
 
 class ErrorResponse(BaseModel):
     status: int

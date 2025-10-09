@@ -1,4 +1,4 @@
-from typing import Any, Literal, Optional, Protocol, Sequence, Tuple
+from typing import Any, Generator, Literal, Optional, Protocol, Sequence, Tuple
 
 from src.shared.models import ItemMetadata, Job, JobItem, JobItemOutput, JobItemSummary, StorageKeys, RetryableError, NonRetryableError
 from src.worker.models import ScrapeResult
@@ -67,6 +67,21 @@ class DatabaseService(Protocol):
         Args:
             job_id: Job ID
             status: New status
+        """
+        ...
+
+    def get_all_job_items(self, job_id: str, batch_size: int = 100) -> Generator[list[JobItem], Any, None]:
+        """
+        Get all job items for a job as an iterator (for manifest generation).
+
+        Yields items in batches to avoid loading everything into memory.
+
+        Args:
+            job_id: Job ID
+            batch_size: Number of items to yield at once
+
+        Yields:
+            Batches of job items
         """
         ...
 

@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Any, Mapping, Optional, cast
+from typing import Any, Generator, Mapping, Optional, cast
 import typing
 import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
@@ -440,6 +440,55 @@ class DynamoDBDatabaseService(DatabaseService):
                 ':updated_at': now_iso()
             })
         )
+
+    def get_all_job_items(self, job_id: str, batch_size: int = 100) -> Generator[list[JobItem], Any, None]:
+        """
+        Get all job items for a job as an iterator (for manifest generation).
+
+        Yields items in batches to avoid loading everything into memory at once.
+
+        Args:
+            job_id: Job ID
+            batch_size: Number of items to yield at once (default: 100)
+
+        Yields:
+            Batches of job items
+        """
+        start_key: Mapping[str, AttributeValueTypeDef] = {}
+        batch: list[JobItem] = []
+
+        while True:
+            query_params: dict[str, Any] = {
+                'TableName': self.settings.table_name,
+                'KeyConditionExpression': 'pk = :pk AND begins_with(sk, :sk_prefix)',
+                'ExpressionAttributeValues': {
+                    ':pk': {'S': job_pk(job_id)},
+                    ':sk_prefix': {'S': 'item#'}
+                },
+                'ConsistentRead': True,
+            }
+
+            if start_key:
+                query_params['ExclusiveStartKey'] = start_key
+
+            resp = self.ddb_client.query(**query_params)
+
+            for item in resp.get('Items', []):
+                batch.append(JobItem.model_validate(_from_ddb_item(item)))
+
+                # Yield batch when it reaches batch_size
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
+
+            if 'LastEvaluatedKey' not in resp:
+                break
+
+            start_key = resp['LastEvaluatedKey']
+
+        # Yield any remaining items
+        if batch:
+            yield batch
 
     def __create_ddb_client(self, settings: Settings) -> DynamoDBClient:
         return boto3.client(

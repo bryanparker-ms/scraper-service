@@ -92,6 +92,7 @@ class Job(BaseModel):
 
 
 class JobItemSummary(BaseModel):
+    pending: int = 0
     queued: int = 0
     running: int = 0
     success: int = 0

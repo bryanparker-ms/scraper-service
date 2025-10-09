@@ -226,6 +226,52 @@ class S3ResultStorage(ResultStorage):
 
         return await loop.run_in_executor(None, _sync_download)
 
+    async def upload_json(self, key: str, data: dict[str, Any] | list[Any]) -> None:
+        """
+        Upload arbitrary JSON data to S3.
+
+        Args:
+            key: S3 key (path) to upload to
+            data: Dictionary or list to serialize as JSON
+        """
+        content = json.dumps(data, indent=2).encode('utf-8')
+        await self._upload_bytes(
+            key,
+            content,
+            {'ContentType': 'application/json'}
+        )
+
+    async def download_json(self, key: str) -> dict[str, Any] | list[Any]:
+        """
+        Download and parse JSON data from S3.
+
+        Args:
+            key: S3 key (path) to download from
+
+        Returns:
+            Parsed JSON data (dict or list)
+
+        Raises:
+            Exception: If file doesn't exist or JSON parsing fails
+        """
+        content = await self._download_bytes(key)
+        return json.loads(content.decode('utf-8'))
+
+    async def download_bytes(self, key: str) -> bytes:
+        """
+        Download raw bytes from S3.
+
+        Args:
+            key: S3 key (path) to download from
+
+        Returns:
+            Raw file content as bytes
+
+        Raises:
+            Exception: If file doesn't exist
+        """
+        return await self._download_bytes(key)
+
     async def update_manifest(
         self,
         job_id: str,

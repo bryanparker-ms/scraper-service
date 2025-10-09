@@ -1,120 +1,15 @@
 import asyncio
 import time
 import logging
-from typing import Dict, Literal
+from typing import Any, Dict
+from src.controller.circuit_breaker import CircuitBreaker
 from src.shared.db import DynamoDBDatabaseService
 from src.shared.queue import SqsQueue
 from src.shared.settings import Settings
 from src.shared.models import Job, JobItem
+from src.shared.storage import S3ResultStorage
 
 logger = logging.getLogger(__name__)
-
-CircuitState = Literal['closed', 'open', 'half_open']
-
-
-class CircuitBreaker:
-    """
-    Circuit breaker to detect failure patterns and stop processing jobs.
-
-    Monitors job item success/failure rates and trips the circuit when
-    failure thresholds are exceeded.
-    """
-
-    def __init__(
-        self,
-        job_id: str,
-        min_requests: int = 50,
-        failure_threshold_percentage: float = 0.5,
-        consecutive_failure_threshold: int = 20,
-        open_duration_seconds: int = 300
-    ):
-        """
-        Initialize circuit breaker.
-
-        Args:
-            job_id: Job ID this circuit breaker monitors
-            min_requests: Minimum requests before circuit can trip
-            failure_threshold_percentage: Trip if failure rate exceeds this (0.0-1.0)
-            consecutive_failure_threshold: Trip after this many consecutive failures
-            open_duration_seconds: How long to keep circuit open (5 minutes default)
-        """
-        self.job_id = job_id
-        self.min_requests = min_requests
-        self.failure_threshold = failure_threshold_percentage
-        self.consecutive_threshold = consecutive_failure_threshold
-        self.open_duration = open_duration_seconds
-
-        self.state: CircuitState = 'closed'
-        self.tripped_at: float | None = None
-        self.consecutive_failures = 0
-
-    def should_allow_request(self) -> bool:
-        """Check if requests should be allowed through the circuit."""
-        if self.state == 'closed':
-            return True
-
-        if self.state == 'open':
-            # Check if we should transition to half_open
-            if self.tripped_at and (time.time() - self.tripped_at) > self.open_duration:
-                logger.info(f'Circuit for job {self.job_id} transitioning to half_open (cooldown expired)')
-                self.state = 'half_open'
-                return True
-            return False
-
-        if self.state == 'half_open':
-            # In half_open, allow limited requests to test recovery
-            return True
-
-        return False
-
-    def check_and_update(self, success_count: int, error_count: int, consecutive_errors: int) -> bool:
-        """
-        Check if circuit should trip based on failure metrics.
-
-        Args:
-            success_count: Number of successful items
-            error_count: Number of failed items
-            consecutive_errors: Number of consecutive errors
-
-        Returns:
-            True if circuit is allowing requests, False if circuit is open
-        """
-        total = success_count + error_count
-
-        # Update consecutive failure counter
-        self.consecutive_failures = consecutive_errors
-
-        # Check consecutive failure threshold
-        if consecutive_errors >= self.consecutive_threshold:
-            if self.state != 'open':
-                self._trip_circuit(f"{consecutive_errors} consecutive failures")
-            return False
-
-        # Check failure rate (only if we have enough data)
-        if total >= self.min_requests:
-            failure_rate = error_count / total
-            if failure_rate >= self.failure_threshold:
-                if self.state != 'open':
-                    self._trip_circuit(f"{failure_rate:.1%} failure rate ({error_count}/{total})")
-                return False
-
-        # If we're in half_open and seeing success, close the circuit
-        if self.state == 'half_open' and consecutive_errors == 0:
-            logger.info(f"Circuit for job {self.job_id} closing (recovery detected)")
-            self.state = 'closed'
-            self.tripped_at = None
-
-        return self.state != 'open'
-
-    def _trip_circuit(self, reason: str):
-        """Trip the circuit breaker."""
-        logger.warning(f"🔴 Circuit breaker TRIPPED for job {self.job_id}: {reason}")
-        self.state = 'open'
-        self.tripped_at = time.time()
-
-    def get_state(self) -> CircuitState:
-        """Get current circuit state."""
-        return self.state
 
 
 class TokenBucket:
@@ -183,6 +78,7 @@ class JobScheduler:
         self.settings = settings
         self.db = DynamoDBDatabaseService(settings)
         self.queue = SqsQueue(settings)
+        self.storage = S3ResultStorage(settings)
         self.rate_limiters: Dict[str, TokenBucket] = {}
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self.running = False
@@ -280,7 +176,8 @@ class JobScheduler:
             item = self.db.get_next_pending_item(job.job_id)
 
             if not item:
-                # No more pending items
+                # No more pending items - check if job is complete
+                await self.check_and_finalize_job(job)
                 break
 
             # Update status IMMEDIATELY to prevent duplicate queueing
@@ -373,3 +270,166 @@ class JobScheduler:
 
         if removed > 0:
             logger.info(f'Cleaned up {removed} rate limiter(s) for finished jobs')
+
+    async def check_and_finalize_job(self, job: Job) -> bool:
+        """
+        Check if job is complete and generate manifests if so.
+
+        Args:
+            job: Job to check
+
+        Returns:
+            True if job was finalized, False otherwise
+        """
+        # Check if job has any incomplete items
+        status_summary = self.db.get_job_status(job.job_id)
+
+        # Count incomplete items
+        incomplete = status_summary.pending + status_summary.queued + status_summary.running
+
+        if incomplete > 0:
+            # Job still has items to process
+            return False
+
+        # Job is complete! Generate manifests
+        logger.info(f"Job {job.job_id} is complete, generating manifests")
+        await self.generate_manifests(job)
+
+        # Update job status to 'completed'
+        self.db.update_job_status(job.job_id, 'completed')
+        logger.info(f"Job {job.job_id} marked as completed")
+
+        return True
+
+    async def generate_manifests(self, job: Job):
+        """
+        Generate manifest files for a completed job.
+
+        Creates:
+        - {job_id}/manifests/full/part-{N}.json - all items (chunked)
+        - {job_id}/manifests/success/part-{N}.json - successful items only (chunked)
+        - {job_id}/manifests/errors/part-{N}.json - failed items only (chunked)
+        - {job_id}/job_metadata.json - summary statistics
+
+        Uses streaming to handle large jobs without loading everything into memory.
+
+        Args:
+            job: Job to generate manifests for
+        """
+        # Helper to convert item to manifest entry
+        def item_to_manifest_entry(item: JobItem) -> dict[str, Any]:
+            return {
+                'item_id': item.item_id,
+                'status': item.status,
+                'storage_keys': item.output.storage_keys if item.output else None,
+                'error_type': item.error_type,
+                'retry_count': item.retry_count,
+                'first_attempt_at': item.first_attempt_at,
+                'last_attempt_at': item.last_attempt_at,
+                'created_at': item.created_at,
+                'updated_at': item.updated_at
+            }
+
+        # Track counts and timing
+        total_items = 0
+        success_count = 0
+        error_count = 0
+        first_attempt = None
+        last_attempt = None
+
+        full_part = 0
+        success_part = 0
+        error_part = 0
+
+        # Process items in batches
+        for batch in self.db.get_all_job_items(job.job_id, batch_size=1000):
+            total_items += len(batch)
+
+            # Separate by status
+            success_batch: list[JobItem] = []
+            error_batch: list[JobItem] = []
+
+            for item in batch:
+                # Track timing
+                if item.first_attempt_at:
+                    if not first_attempt or item.first_attempt_at < first_attempt:
+                        first_attempt = item.first_attempt_at
+                if item.last_attempt_at:
+                    if not last_attempt or item.last_attempt_at > last_attempt:
+                        last_attempt = item.last_attempt_at
+
+                # Categorize
+                if item.status == 'success':
+                    success_count += 1
+                    success_batch.append(item)
+                elif item.status in ('error', 'retrying'):
+                    error_count += 1
+                    error_batch.append(item)
+
+            # Upload full manifest chunk (all items in this batch)
+            if batch:
+                full_manifest_chunk = {
+                    'job_id': job.job_id,
+                    'part': full_part,
+                    'items': [item_to_manifest_entry(item) for item in batch]
+                }
+                await self._upload_manifest(job.job_id, f'manifests/full/part-{full_part}.json', full_manifest_chunk)
+                full_part += 1
+
+            # Upload success manifest chunk
+            if success_batch:
+                success_manifest_chunk = {
+                    'job_id': job.job_id,
+                    'part': success_part,
+                    'items': [item_to_manifest_entry(item) for item in success_batch]
+                }
+                await self._upload_manifest(job.job_id, f'manifests/success/part-{success_part}.json', success_manifest_chunk)
+                success_part += 1
+
+            # Upload error manifest chunk
+            if error_batch:
+                error_manifest_chunk = {
+                    'job_id': job.job_id,
+                    'part': error_part,
+                    'items': [item_to_manifest_entry(item) for item in error_batch]
+                }
+                await self._upload_manifest(job.job_id, f'manifests/errors/part-{error_part}.json', error_manifest_chunk)
+                error_part += 1
+
+        # Calculate job duration
+        job_duration_seconds = None
+        if first_attempt and last_attempt:
+            from datetime import datetime
+            start = datetime.fromisoformat(first_attempt.replace('Z', '+00:00'))
+            end = datetime.fromisoformat(last_attempt.replace('Z', '+00:00'))
+            job_duration_seconds = (end - start).total_seconds()
+
+        # Create metadata summary
+        job_metadata = {
+            'job_id': job.job_id,
+            'job_name': job.job_name,
+            'scraper_id': job.scraper_id,
+            'status': 'completed',
+            'total_items': total_items,
+            'success_count': success_count,
+            'error_count': error_count,
+            'duration_seconds': job_duration_seconds,
+            'created_at': job.created_at,
+            'updated_at': job.updated_at,
+            'manifest_info': {
+                'full_parts': full_part,
+                'success_parts': success_part,
+                'error_parts': error_part
+            }
+        }
+
+        # Upload metadata
+        await self._upload_manifest(job.job_id, 'job_metadata.json', job_metadata)
+
+        logger.info(f"Generated manifests for job {job.job_id}: {total_items} items in {full_part} parts")
+
+    async def _upload_manifest(self, job_id: str, key_suffix: str, data: dict[str, Any]):
+        """Upload a manifest file to S3."""
+        key = f"{job_id}/{key_suffix}"
+        await self.storage.upload_json(key, data)
+        logger.debug(f"Uploaded manifest: {key}")

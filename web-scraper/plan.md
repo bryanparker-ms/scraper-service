@@ -140,31 +140,51 @@ Build a robust, scalable web scraping worker system that can:
 - [x] Implement configurable backoff strategies (linear/exponential)
 - [x] Pass ExecutionPolicy through: Job → Worker → Scraper → httpx client
 
-### 6.3 Rate Limiting & Circuit Breaker (DEFERRED)
-- [ ] Implement worker-level rate limiting with token buckets
-- [ ] Apply job-level rate limits from `ThrottlingPolicy`
+### 6.3 Rate Limiting ✅
+- [x] Analyzed 7 different rate limiting approaches
+- [x] Chose "Scheduler Service" pattern - controller handles rate-limited queueing
+- [x] Created `JobScheduler` with background task in controller
+- [x] Implemented `TokenBucket` for in-memory rate limiting
+- [x] Added per-job rate limiters reading from `ThrottlingPolicy`
+- [x] Implemented batching (up to 10 items per cycle for SQS efficiency)
+- [x] Fixed race condition by updating status immediately after dequeuing
+- [x] Optimized poll interval to 1 second (configurable)
+- [x] Updated status flow: pending → queued → in_progress
 
-### 6.3 Circuit Breaker
-- [ ] Implement job-level circuit breakers
-- [ ] Detect consecutive failure patterns
-- [ ] Pause job when circuit breaker trips
-- [ ] Add manual circuit breaker controls via API
+### 6.4 Circuit Breaker ✅
+- [x] Created `CircuitBreaker` class with three states (closed/open/half_open)
+- [x] Implemented failure detection (consecutive failures >= 20 OR failure rate >= 50%)
+- [x] Added `get_job_failure_metrics()` to query success/error counts from DynamoDB
+- [x] Integrated circuit breaker into scheduler loop
+- [x] Configured circuit breaker from `CircuitBreakerPolicy` in ExecutionPolicy
+- [x] Pause job (status='paused') when circuit breaker trips
+- [x] Implemented auto-recovery after cooldown period (5 min default)
+- [x] Added half_open state to test recovery before fully closing circuit
 
-## 🏗️ Phase 7: Manifest Aggregation & Job Finalization
+## ✅ Phase 7: Manifest Aggregation & Job Finalization (COMPLETED)
 
-### 7.1 Manifest Generation
-- [ ] Detect when job is complete (all items processed)
-- [ ] Aggregate per-item manifests into consolidated views
-- [ ] Generate `manifests/full.json` with all items
-- [ ] Generate `manifests/success.json` with successful items only
-- [ ] Generate `manifests/errors.json` with failed items only
-- [ ] Generate `job_metadata.json` with summary statistics
+### 7.1 Manifest Generation ✅
+- [x] Detect when job is complete (all items processed)
+- [x] Implement streaming architecture for large jobs (batch size: 1000 items)
+- [x] Generate chunked manifests to handle millions of items without memory issues
+- [x] Create `manifests/full/part-{N}.json` with all items (chunked)
+- [x] Create `manifests/success/part-{N}.json` with successful items only (chunked)
+- [x] Create `manifests/errors/part-{N}.json` with failed items only (chunked)
+- [x] Create `job_metadata.json` with summary statistics and part counts
+- [x] Integrate manifest generation into scheduler (auto-triggers on completion)
+- [x] Update job status to 'completed' after manifest generation
+- [x] Calculate job duration from first/last attempt timestamps
 
-### 7.2 Result Access API
-- [ ] Add endpoint: `GET /jobs/{job_id}/results` to download manifest
-- [ ] Add endpoint: `GET /jobs/{job_id}/download` for bulk result download
-- [ ] Support filtering results by status (success/error)
-- [ ] Add pagination for large result sets
+### 7.2 Result Access API ✅
+- [x] Add endpoint: `GET /jobs/{job_id}/results` to download manifest
+- [x] Add endpoint: `GET /jobs/{job_id}/items/{item_id}/download` for individual artifact download
+- [x] Support filtering results by status (success/error/all)
+- [x] Add pagination for large result sets (via part parameter)
+- [x] Support downloading HTML, data, metadata, and screenshot artifacts
+- [x] Add `download_json()` and `download_bytes()` public methods to storage interface
+- [x] Add type validation for downloaded JSON (dict vs list)
+- [x] Return metadata + links to all parts when no part specified
+- [x] Validate job is completed before allowing result access
 
 ## 🎭 Phase 8: Playwright Browser Automation
 
@@ -246,25 +266,31 @@ Build a robust, scalable web scraping worker system that can:
 
 ---
 
-## 📍 Current Status: Phase 6 Complete
+## 📍 Current Status: Phase 7 Complete ✅
 
-**Last Completed**: ExecutionPolicy Integration (Phase 6.2) ✅
-**Currently**: Production-ready system with real scraper, proxies, and full ExecutionPolicy support
-**Next Up**: Rate Limiting (Phase 6.3) or Manifest Aggregation (Phase 7)
+**Last Completed**: Manifest Aggregation & Result Access API (Phase 7) ✅
+**Currently**: Production-ready system with complete end-to-end functionality from job creation to result retrieval
+**Next Up**: Playwright Browser Automation (Phase 8) or CLI Tools (Phase 12)
 
 **Working Features**:
 - ✅ Complete worker loop with SQS integration
 - ✅ HTTP scraper framework with retry/error handling
 - ✅ S3 result storage with compression and manifests
-- ✅ DynamoDB status tracking
+- ✅ DynamoDB status tracking with three-state flow (pending → queued → in_progress)
 - ✅ Scraper registry with decorator syntax
 - ✅ Local storage option for development
 - ✅ Production Maricopa County scraper working end-to-end
-- ✅ ExecutionPolicy integration (proxy, timeout, retry policies)
+- ✅ ExecutionPolicy integration (proxy, timeout, retry, rate limiting, circuit breaker)
 - ✅ BrightData proxy support (datacenter/residential/web-unlocker)
 - ✅ Geo-targeting for residential proxies
 - ✅ HTML parsing and validation utilities
 - ✅ Hybrid validation framework (inline + post-scrape)
+- ✅ Scheduler service with token bucket rate limiting
+- ✅ Circuit breaker with auto-pause on failure patterns
+- ✅ Job status management (paused when circuit trips)
+- ✅ **NEW**: Chunked manifest generation for large jobs (handles millions of items)
+- ✅ **NEW**: Result access API with filtering and pagination
+- ✅ **NEW**: Individual artifact download (HTML, data, metadata, screenshots)
 
 **Testing**:
 ```bash
@@ -290,10 +316,30 @@ python -m src.worker.main
 
 **System Architecture**:
 ```
-Controller (FastAPI) → SQS Queue → Worker (ECS Tasks)
-     ↓                                ↓
-  DynamoDB ←────────────────────── S3 Storage
-  (Status)                        (Results)
+Controller (FastAPI)
+    ├─ REST API (create jobs, check status)
+    └─ Background Scheduler (rate limiting + circuit breaker)
+          ↓
+       DynamoDB (pending items)
+          ↓
+       SQS Queue (rate-limited queueing)
+          ↓
+    Worker (ECS Tasks)
+          ↓
+       S3 Storage (results)
 ```
 
-The foundation is solid and production-ready. We can now build real scrapers and add execution policy integration for production-scale scraping.
+**Rate Limiting & Circuit Breaker Flow**:
+1. Controller stores job items with status='pending'
+2. Scheduler polls DynamoDB for pending items
+3. Token bucket rate limiter controls queueing speed
+4. Circuit breaker monitors failure metrics from DynamoDB
+5. If circuit trips (20 consecutive errors OR 50%+ failure rate), job is paused
+6. After cooldown (5 min), circuit enters half_open to test recovery
+7. If recovery succeeds, circuit closes and job resumes
+
+**Phase 7 Completion - Manifest Generation & Result Access**:
+The system now has complete end-to-end functionality:
+- Jobs are created → items queued with rate limiting → workers process → manifests generated → results accessible via API
+- Handles jobs of any size (millions of items) with streaming architecture
+- Complete observability from creation to completion

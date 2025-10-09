@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Query
+from typing import Any, Literal
 import asyncio
 import logging
 
 from src.controller.models import CreateJobRequest, CreateJobResponse, ErrorResponse, GetJobsResponse, JobStatusResponse
-from src.controller.service import get_job_status, get_latest_jobs, create_job, get_queue_length, purge_queue
+from src.controller.service import get_job_status, get_latest_jobs, create_job, get_queue_length, purge_queue, get_job_results, download_job_item
 from src.controller.scheduler import JobScheduler
 from src.shared.settings import Settings
 
@@ -70,3 +71,36 @@ def purge_queue_route() -> Response:
     purge_queue()
 
     return Response(status_code=200)
+
+
+@app.get('/jobs/{job_id}/results')
+async def get_job_results_route(
+    job_id: str,
+    filter: Literal['all', 'success', 'errors'] | None = Query(None, description="Filter results by status"),
+    part: int | None = Query(None, description="Specific manifest part to retrieve (0-indexed)")
+) -> dict[str, Any] | ErrorResponse:
+    """
+    Get job results/manifest.
+
+    Returns metadata and manifest data. For large jobs with multiple parts,
+    use the 'part' parameter to retrieve specific chunks.
+    """
+    return await get_job_results(job_id, filter=filter, part=part)
+
+
+@app.get('/jobs/{job_id}/items/{item_id}/download')
+async def download_job_item_route(
+    job_id: str,
+    item_id: str,
+    artifact: Literal['html', 'data', 'metadata', 'screenshot'] = Query('html', description="Which artifact to download")
+):
+    """
+    Download a specific artifact for a job item.
+
+    Artifacts:
+    - html: The scraped HTML content
+    - data: The extracted JSON data
+    - metadata: Item metadata (timing, storage keys, etc.)
+    - screenshot: Screenshot (if captured)
+    """
+    return await download_job_item(job_id, item_id, artifact)
