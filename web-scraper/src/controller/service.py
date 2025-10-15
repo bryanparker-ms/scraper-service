@@ -53,6 +53,9 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
 
     # Create job items with status='pending'
     # The scheduler will pick these up and push to SQS at the configured rate
+    import logging
+    logger = logging.getLogger(__name__)
+
     for item in request.items:
         job_item = JobItem(
             job_id=job_id,
@@ -62,9 +65,11 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
             retry_count=0
         )
 
+        logger.info(f"Creating job item {item.item_id} with status={job_item.status}")
         db.create_job_item(job_id, job_item)
 
     # No SQS push here! Scheduler handles rate-limited queueing
+    logger.info(f"Created {len(request.items)} job items for job {job_id}")
     return CreateJobResponse(job_id=job_id, seeded_count=len(request.items))
 
 

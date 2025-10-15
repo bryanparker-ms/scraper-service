@@ -7,7 +7,7 @@ RetryableError = Literal['timeout', 'server_error', 'network_error', 'proxy_erro
 NonRetryableError = Literal['no_results', 'not_found', 'invalid_input']
 
 JobStatus = Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']
-JobItemStatus = Literal['pending', 'queued', 'in_progress', 'success', 'error', 'retrying']
+JobItemStatus = Literal['pending', 'queued', 'in_progress', 'success', 'failed']
 
 """
 Job models
@@ -41,8 +41,14 @@ class JobItem(BaseModel):
 
 
 class ThrottlingPolicy(BaseModel):
-    rate_limit_per_second: float = 1.0
-    concurrent_requests: int = 5
+    """
+    Concurrency control policy to prevent overwhelming target websites.
+
+    Controls the maximum number of workers that can process items from
+    the same job simultaneously. This prevents too many concurrent connections
+    to the same website, reducing the risk of being blocked or banned.
+    """
+    max_concurrent_workers: int = 3  # Maximum workers processing this job at once
 
 
 class ProxyGeolocationPolicy(BaseModel):
@@ -67,9 +73,14 @@ class TimeoutPolicy(BaseModel):
 
 
 class CircuitBreakerPolicy(BaseModel):
+    """
+    Circuit breaker policy to stop jobs that are failing.
+
+    Once tripped, the job stays paused permanently and must be manually
+    resumed or restarted.
+    """
     min_requests: int = 50
     failure_threshold_percentage: float = 0.25
-    open_circuit_seconds: int = 300
 
 
 class ExecutionPolicy(BaseModel):
@@ -94,9 +105,9 @@ class Job(BaseModel):
 class JobItemSummary(BaseModel):
     pending: int = 0
     queued: int = 0
-    running: int = 0
+    in_progress: int = 0
     success: int = 0
-    error: int = 0
+    failed: int = 0
     max_retries: int = 0
     skipped: int = 0
 

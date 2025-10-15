@@ -40,7 +40,7 @@ class BaseScraper(Protocol):
         ...
 
 
-class BaseHttpScraper(ABC):
+class BaseHttpScraper(ABC, BaseScraper):
     """
     Base class for HTTP-based scrapers using httpx.
 

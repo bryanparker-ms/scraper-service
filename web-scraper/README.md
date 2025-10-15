@@ -74,3 +74,41 @@ curl -X POST http://localhost:8000/jobs \
     ]
   }'
 ```
+
+### Examples
+
+#### Rate limiting
+
+```bash
+curl -X POST http://localhost:8000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "circuit-breaker-test",
+    "job_name": "Circuit Breaker Test",
+    "scraper_id": "example-fail",
+    "execution_policy": {
+      "throttling": {
+        "max_concurrent_workers": 3
+      },
+      "circuit_breaker": {
+        "min_requests": 5,
+        "failure_threshold_percentage": 0.8
+      },
+      "retries": {
+        "max_retries": 1
+      }
+    },
+    "items": [
+      {"item_id": "item-01", "input": {"test_param": "value1"}},
+      {"item_id": "item-02", "input": {"test_param": "value2"}},
+      {"item_id": "item-03", "input": {"test_param": "value3"}},
+      {"item_id": "item-04", "input": {"test_param": "value4"}},
+      {"item_id": "item-05", "input": {"test_param": "value5"}},
+      {"item_id": "item-06", "input": {"test_param": "value6"}},
+      {"item_id": "item-07", "input": {"test_param": "value7"}},
+      {"item_id": "item-08", "input": {"test_param": "value8"}},
+      {"item_id": "item-09", "input": {"test_param": "value9"}},
+      {"item_id": "item-10", "input": {"test_param": "value10"}}
+    ]
+  }'
+```

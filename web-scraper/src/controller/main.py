@@ -25,21 +25,31 @@ async def lifespan(app: FastAPI):
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
 
+    # Set our application loggers to INFO
+    logging.getLogger('src.controller').setLevel(logging.INFO)
+    logging.getLogger('src.worker').setLevel(logging.INFO)
+    logging.getLogger('src.shared').setLevel(logging.INFO)
+
+    # Suppress noisy third-party loggers
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
     # Startup: Start scheduler as background task
-    logger.info("Starting scheduler background task")
+    logger.info('Starting scheduler background task')
     scheduler_task = asyncio.create_task(scheduler.start())
 
     yield
 
     # Shutdown: Stop scheduler gracefully
-    logger.info("Stopping scheduler background task")
+    logger.info('Stopping scheduler background task')
     await scheduler.stop()
     scheduler_task.cancel()
     try:
         await scheduler_task
     except asyncio.CancelledError:
         pass
-    logger.info("Scheduler stopped")
+    logger.info('Scheduler stopped')
 
 
 # Create FastAPI app with lifespan
@@ -77,7 +87,7 @@ def purge_queue_route() -> Response:
 async def get_job_results_route(
     job_id: str,
     filter: Literal['all', 'success', 'errors'] | None = Query(None, description="Filter results by status"),
-    part: int | None = Query(None, description="Specific manifest part to retrieve (0-indexed)")
+    part: int | None = Query(None, description='Specific manifest part to retrieve (0-indexed)')
 ) -> dict[str, Any] | ErrorResponse:
     """
     Get job results/manifest.
@@ -92,7 +102,7 @@ async def get_job_results_route(
 async def download_job_item_route(
     job_id: str,
     item_id: str,
-    artifact: Literal['html', 'data', 'metadata', 'screenshot'] = Query('html', description="Which artifact to download")
+    artifact: Literal['html', 'data', 'metadata', 'screenshot'] = Query('html', description='Which artifact to download')
 ):
     """
     Download a specific artifact for a job item.

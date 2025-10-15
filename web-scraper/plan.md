@@ -140,26 +140,29 @@ Build a robust, scalable web scraping worker system that can:
 - [x] Implement configurable backoff strategies (linear/exponential)
 - [x] Pass ExecutionPolicy through: Job → Worker → Scraper → httpx client
 
-### 6.3 Rate Limiting ✅
+### 6.3 Concurrency Control ✅
 - [x] Analyzed 7 different rate limiting approaches
-- [x] Chose "Scheduler Service" pattern - controller handles rate-limited queueing
+- [x] Chose "Scheduler Service" pattern - controller handles concurrency-limited queueing
 - [x] Created `JobScheduler` with background task in controller
-- [x] Implemented `TokenBucket` for in-memory rate limiting
-- [x] Added per-job rate limiters reading from `ThrottlingPolicy`
+- [x] Replaced rate limiting with `max_concurrent_workers` concurrency control
+- [x] Scheduler only queues items if in-flight count < max_concurrent_workers
+- [x] Track in-flight items (queued + in_progress) per job
 - [x] Implemented batching (up to 10 items per cycle for SQS efficiency)
 - [x] Fixed race condition by updating status immediately after dequeuing
 - [x] Optimized poll interval to 1 second (configurable)
-- [x] Updated status flow: pending → queued → in_progress
+- [x] Updated status flow: pending → queued → in_progress → success/failed
 
 ### 6.4 Circuit Breaker ✅
-- [x] Created `CircuitBreaker` class with three states (closed/open/half_open)
-- [x] Implemented failure detection (consecutive failures >= 20 OR failure rate >= 50%)
-- [x] Added `get_job_failure_metrics()` to query success/error counts from DynamoDB
-- [x] Integrated circuit breaker into scheduler loop
+- [x] Created `CircuitBreaker` class with two states (closed/open)
+- [x] Implemented failure detection (consecutive failures >= 20 OR failure rate >= configurable %)
+- [x] Added `get_job_failure_metrics()` to query success/failed counts from DynamoDB
+- [x] Integrated circuit breaker into scheduler loop with mid-batch checks
 - [x] Configured circuit breaker from `CircuitBreakerPolicy` in ExecutionPolicy
-- [x] Pause job (status='paused') when circuit breaker trips
-- [x] Implemented auto-recovery after cooldown period (5 min default)
-- [x] Added half_open state to test recovery before fully closing circuit
+- [x] Mark job as `failed` when circuit breaker trips (no auto-recovery)
+- [x] Simplified status model: removed `retrying` status, items go directly to `failed`
+- [x] Renamed `error` status to `failed` to match `JobStatus` naming
+- [x] Fixed concurrency control bug (was reading `running` instead of `in_progress`)
+- [x] Implemented batch size limiting to avoid overshooting `min_requests` threshold
 
 ## ✅ Phase 7: Manifest Aggregation & Job Finalization (COMPLETED)
 
@@ -285,9 +288,9 @@ Build a robust, scalable web scraping worker system that can:
 - ✅ Geo-targeting for residential proxies
 - ✅ HTML parsing and validation utilities
 - ✅ Hybrid validation framework (inline + post-scrape)
-- ✅ Scheduler service with token bucket rate limiting
-- ✅ Circuit breaker with auto-pause on failure patterns
-- ✅ Job status management (paused when circuit trips)
+- ✅ Scheduler service with concurrency control (max_concurrent_workers)
+- ✅ Circuit breaker with automatic job failure on threshold breach
+- ✅ Simplified status model: pending/queued/in_progress/success/failed (removed retrying)
 - ✅ **NEW**: Chunked manifest generation for large jobs (handles millions of items)
 - ✅ **NEW**: Result access API with filtering and pagination
 - ✅ **NEW**: Individual artifact download (HTML, data, metadata, screenshots)
@@ -329,14 +332,15 @@ Controller (FastAPI)
        S3 Storage (results)
 ```
 
-**Rate Limiting & Circuit Breaker Flow**:
+**Concurrency Control & Circuit Breaker Flow**:
 1. Controller stores job items with status='pending'
 2. Scheduler polls DynamoDB for pending items
-3. Token bucket rate limiter controls queueing speed
-4. Circuit breaker monitors failure metrics from DynamoDB
-5. If circuit trips (20 consecutive errors OR 50%+ failure rate), job is paused
-6. After cooldown (5 min), circuit enters half_open to test recovery
-7. If recovery succeeds, circuit closes and job resumes
+3. Concurrency control limits in-flight items (queued + in_progress) per job
+4. Scheduler queues items only if in-flight < max_concurrent_workers (default: 3)
+5. Circuit breaker monitors failure metrics from DynamoDB before each batch
+6. Batch size is limited to avoid overshooting min_requests threshold
+7. If circuit trips (20 consecutive errors OR configurable % failure rate), job marked as 'failed'
+8. Jobs with status='failed' are excluded from active jobs and won't be scheduled
 
 **Phase 7 Completion - Manifest Generation & Result Access**:
 The system now has complete end-to-end functionality:

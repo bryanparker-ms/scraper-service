@@ -5,7 +5,7 @@ from typing import Literal
 logger = logging.getLogger(__name__)
 
 
-CircuitState = Literal['closed', 'open', 'half_open']
+CircuitState = Literal['closed', 'open']
 
 
 class CircuitBreaker:
@@ -13,7 +13,8 @@ class CircuitBreaker:
     Circuit breaker to detect failure patterns and stop processing jobs.
 
     Monitors job item success/failure rates and trips the circuit when
-    failure thresholds are exceeded.
+    failure thresholds are exceeded. Once tripped, the circuit stays open
+    permanently - the job must be manually resumed or restarted.
     """
 
     def __init__(
@@ -21,8 +22,7 @@ class CircuitBreaker:
         job_id: str,
         min_requests: int = 50,
         failure_threshold_percentage: float = 0.5,
-        consecutive_failure_threshold: int = 20,
-        open_duration_seconds: int = 300
+        consecutive_failure_threshold: int = 20
     ):
         """
         Initialize circuit breaker.
@@ -32,13 +32,11 @@ class CircuitBreaker:
             min_requests: Minimum requests before circuit can trip
             failure_threshold_percentage: Trip if failure rate exceeds this (0.0-1.0)
             consecutive_failure_threshold: Trip after this many consecutive failures
-            open_duration_seconds: How long to keep circuit open (5 minutes default)
         """
         self.job_id = job_id
         self.min_requests = min_requests
         self.failure_threshold = failure_threshold_percentage
         self.consecutive_threshold = consecutive_failure_threshold
-        self.open_duration = open_duration_seconds
 
         self.state: CircuitState = 'closed'
         self.tripped_at: float | None = None
@@ -46,22 +44,7 @@ class CircuitBreaker:
 
     def should_allow_request(self) -> bool:
         """Check if requests should be allowed through the circuit."""
-        if self.state == 'closed':
-            return True
-
-        if self.state == 'open':
-            # Check if we should transition to half_open
-            if self.tripped_at and (time.time() - self.tripped_at) > self.open_duration:
-                logger.info(f'Circuit for job {self.job_id} transitioning to half_open (cooldown expired)')
-                self.state = 'half_open'
-                return True
-            return False
-
-        if self.state == 'half_open':
-            # In half_open, allow limited requests to test recovery
-            return True
-
-        return False
+        return self.state == 'closed'
 
     def check_and_update(self, success_count: int, error_count: int, consecutive_errors: int) -> bool:
         """
@@ -91,20 +74,14 @@ class CircuitBreaker:
             failure_rate = error_count / total
             if failure_rate >= self.failure_threshold:
                 if self.state != 'open':
-                    self._trip_circuit(f"{failure_rate:.1%} failure rate ({error_count}/{total})")
+                    self._trip_circuit(f'{failure_rate:.1%} failure rate ({error_count}/{total})')
                 return False
-
-        # If we're in half_open and seeing success, close the circuit
-        if self.state == 'half_open' and consecutive_errors == 0:
-            logger.info(f"Circuit for job {self.job_id} closing (recovery detected)")
-            self.state = 'closed'
-            self.tripped_at = None
 
         return self.state != 'open'
 
     def _trip_circuit(self, reason: str):
         """Trip the circuit breaker."""
-        logger.warning(f"🔴 Circuit breaker TRIPPED for job {self.job_id}: {reason}")
+        logger.warning(f'🔴 Circuit breaker TRIPPED for job {self.job_id}: {reason}')
         self.state = 'open'
         self.tripped_at = time.time()
 

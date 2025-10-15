@@ -56,20 +56,24 @@ class ScraperRegistry:
                 version=version,
                 description=description
             )
+
             self._scrapers[scraper_id] = (scraper_class, metadata)
             return scraper_class
+
         return decorator
 
     def get(self, scraper_id: str) -> Type[BaseScraper] | None:
         """Get scraper class by ID."""
         if scraper_id in self._scrapers:
             return self._scrapers[scraper_id][0]
+
         return None
 
     def get_metadata(self, scraper_id: str) -> ScraperMetadata | None:
         """Get metadata for a scraper."""
         if scraper_id in self._scrapers:
             return self._scrapers[scraper_id][1]
+
         return None
 
     def list_all(self) -> list[ScraperMetadata]:

@@ -146,6 +146,10 @@ class Worker:
 
             logger.error(f'Scraper error for item {job_item.item_id}: {e.error_type} - {e}')
 
+            # Get max_retries from job's execution policy
+            job = self.db.get_job(job_item.job_id)
+            max_retries = job.execution_policy.retries.max_retries if job.execution_policy and job.execution_policy.retries else 3
+
             # update db with error details
             self.db.update_job_item_error(
                 job_id=job_item.job_id,
@@ -153,26 +157,28 @@ class Worker:
                 error_type=e.error_type,
                 error_message=str(e),
                 retry_count=job_item.retry_count + 1,
-                last_attempt_at=completed_at
+                last_attempt_at=completed_at,
+                max_retries=max_retries
             )
 
             logger.info(f'Updated DB with error status for {job_item.item_id}: {e.error_type}')
 
-
-            # determine if the error is retryable or not:
-            #   - for non-retryable errors, delete the message
-            #   - for retryable errors, let it return to queue (visibility timeout expires)
-            if not JobItem.is_retryable_error(e.error_type):
-                self._delete_message(receipt_handle)
-                logger.info(f'Deleted message {message_id} (non-retryable error)')
-            else:
-                logger.info(f'Message {message_id} will return to queue for retry (retryable error: {e.error_type})')
+            # Delete the message from SQS since we've exhausted retries
+            # Note: The scraper already handles retries internally, so by the time
+            # we get here, all retry attempts have failed. We should not put the
+            # message back in the queue.
+            self._delete_message(receipt_handle)
+            logger.info(f'Deleted message {message_id} after exhausting retries (error: {e.error_type})')
 
         except Exception as e:
             # oops... this isn't expected. report it and try again (maybe we shouldn't try unexpected errors again)
             completed_at = now_iso()
 
             logger.exception(f'Unexpected error processing item {job_item.item_id}: {e}')
+
+            # Get max_retries from job's execution policy
+            job = self.db.get_job(job_item.job_id)
+            max_retries = job.execution_policy.retries.max_retries if job.execution_policy and job.execution_policy.retries else 3
 
             # log the error back to the DB
             self.db.update_job_item_error(
@@ -181,7 +187,8 @@ class Worker:
                 error_type='unexpected',
                 error_message=str(e),
                 retry_count=job_item.retry_count + 1,
-                last_attempt_at=completed_at
+                last_attempt_at=completed_at,
+                max_retries=max_retries
             )
 
     def _get_scraper_for_item(self, job_item: JobItem) -> BaseScraper:

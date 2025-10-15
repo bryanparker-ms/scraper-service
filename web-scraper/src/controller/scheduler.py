@@ -12,59 +12,16 @@ from src.shared.storage import S3ResultStorage
 logger = logging.getLogger(__name__)
 
 
-class TokenBucket:
-    """In-memory token bucket for rate limiting"""
-
-    def __init__(self, rate: float, burst: float):
-        """
-        Initialize token bucket.
-
-        Args:
-            rate: Tokens per second (refill rate)
-            burst: Maximum capacity (burst size)
-        """
-        self.rate = rate
-        self.capacity = burst
-        self.tokens = burst
-        self.last_refill = time.time()
-
-    def try_acquire(self, cost: float = 1.0) -> bool:
-        """
-        Try to acquire a token, return True if successful.
-
-        Args:
-            cost: Number of tokens to consume (default: 1.0)
-
-        Returns:
-            True if token acquired, False otherwise
-        """
-        now = time.time()
-        elapsed = now - self.last_refill
-
-        # Refill tokens based on elapsed time
-        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
-        self.last_refill = now
-
-        # Try to consume
-        if self.tokens >= cost:
-            self.tokens -= cost
-            return True
-        return False
-
-    def tokens_available(self) -> float:
-        """Get current token count (for observability)"""
-        now = time.time()
-        elapsed = now - self.last_refill
-        return min(self.capacity, self.tokens + elapsed * self.rate)
-
-
 class JobScheduler:
     """
-    Background scheduler that reads queued items from DynamoDB
-    and pushes them to SQS at the configured rate.
+    Background scheduler that reads pending items from DynamoDB
+    and pushes them to SQS while enforcing concurrency limits.
 
     This runs as a background task in the controller service, providing
-    centralized rate limiting without requiring a separate deployment.
+    centralized concurrency control without requiring a separate deployment.
+
+    Concurrency control limits how many workers can process items from the
+    same job simultaneously, preventing overwhelming target websites.
     """
 
     def __init__(self, settings: Settings, poll_interval_seconds: float = 1.0):
@@ -79,12 +36,11 @@ class JobScheduler:
         self.db = DynamoDBDatabaseService(settings)
         self.queue = SqsQueue(settings)
         self.storage = S3ResultStorage(settings)
-        self.rate_limiters: Dict[str, TokenBucket] = {}
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self.running = False
         self.poll_interval = poll_interval_seconds
 
-        logger.info(f"JobScheduler initialized (poll interval: {poll_interval_seconds}s)")
+        logger.info(f'JobScheduler initialized (poll interval: {poll_interval_seconds}s)')
 
     async def start(self):
         """Start the scheduler background task"""
@@ -113,8 +69,10 @@ class JobScheduler:
         active_jobs = self.db.get_active_jobs()
 
         if not active_jobs:
-            # No active jobs, nothing to do
+            # no active jobs, nothing to do
             return
+
+        logger.info(f'Found {len(active_jobs)} active job(s): {[j.job_id for j in active_jobs]}')
 
         # Process each job
         for job in active_jobs:
@@ -131,21 +89,24 @@ class JobScheduler:
         """
         Schedule items for a single job.
 
-        Batches up to 10 items at a time if tokens are available.
-        Checks circuit breaker to prevent queueing items for failing jobs.
+        Enforces concurrency control by limiting how many workers can process
+        items from this job simultaneously. Checks circuit breaker to prevent
+        queueing items for failing jobs.
 
         Args:
             job: Job to schedule items for
         """
-        # Get or create circuit breaker for this job
+        logger.info(f'Scheduling job {job.job_id} (status: {job.status})')
+
+        # get or create circuit breaker for this job
         circuit = self.get_circuit_breaker(job)
 
-        # Check circuit breaker status
+        # check circuit breaker status
         if not circuit.should_allow_request():
-            logger.debug(f'Circuit breaker OPEN for job {job.job_id}, skipping scheduling')
+            logger.info(f'Circuit breaker OPEN for job {job.job_id}, skipping scheduling')
             return
 
-        # Update circuit breaker with latest failure metrics
+        # update circuit breaker with latest failure metrics
         failure_metrics = self.db.get_job_failure_metrics(job.job_id)
         circuit_ok = circuit.check_and_update(
             success_count=failure_metrics['success_count'],
@@ -154,71 +115,87 @@ class JobScheduler:
         )
 
         if not circuit_ok:
-            # Circuit just tripped, stop scheduling and pause job
+            # circuit just tripped, stop scheduling and fail job
             logger.warning(f'Stopping scheduling for job {job.job_id} (circuit breaker tripped)')
-            self.db.update_job_status(job.job_id, 'paused')
+            self.db.update_job_status(job.job_id, 'failed')
             return
 
-        # Get or create rate limiter for this job
-        limiter = self.get_rate_limiter(job)
+        # Get concurrency limit from execution policy
+        max_concurrent = job.execution_policy.throttling.max_concurrent_workers if job.execution_policy and job.execution_policy.throttling else 3
 
-        # Collect items to batch (up to 10 for SQS batch limit)
+        # Check how many items are currently in-flight (queued or in_progress)
+        status_summary = self.db.get_job_status(job.job_id)
+        in_flight = status_summary.queued + status_summary.in_progress
+
+        logger.info(f'Job {job.job_id}: {in_flight} in-flight items (max: {max_concurrent})')
+
+        # If we're at or over the limit, don't queue more items
+        if in_flight >= max_concurrent:
+            logger.info(f'Job {job.job_id} at concurrency limit ({in_flight}/{max_concurrent}), skipping')
+            return
+
+        # Calculate how many items we can queue based on concurrency limit
+        slots_available = max_concurrent - in_flight
+
+        # Also consider circuit breaker limits - don't queue more items than needed to reach min_requests
+        # This prevents queueing large batches when we're close to tripping the circuit
+        circuit_policy = job.execution_policy.circuit_breaker if job.execution_policy and job.execution_policy.circuit_breaker else None
+        if circuit_policy:
+            completed_count = status_summary.success + status_summary.failed
+            min_requests = circuit_policy.min_requests
+
+            # If we haven't reached min_requests yet, limit batch size to avoid overshooting
+            if completed_count < min_requests:
+                remaining_until_min = min_requests - completed_count
+                slots_available = min(slots_available, remaining_until_min)
+                logger.info(f'Job {job.job_id}: {completed_count}/{min_requests} requests completed, limiting batch to {remaining_until_min} to avoid overshooting circuit breaker threshold')
+
+        # Cap at 10 for SQS batch limit
+        max_batch_size = min(slots_available, 10)
+
+        logger.info(f'Job {job.job_id}: {slots_available} slots available, queueing up to {max_batch_size} items')
+
+        # Collect items to batch
         items_to_queue: list[JobItem] = []
-        max_batch_size = 10
 
-        for _ in range(max_batch_size):
-            # Try to acquire token
-            if not limiter.try_acquire():
-                # No more tokens available
+        for i in range(max_batch_size):
+            # re-check circuit breaker before each item to catch recent failures
+            failure_metrics = self.db.get_job_failure_metrics(job.job_id)
+            circuit_ok = circuit.check_and_update(
+                success_count=failure_metrics['success_count'],
+                error_count=failure_metrics['error_count'],
+                consecutive_errors=failure_metrics['consecutive_errors']
+            )
+
+            if not circuit_ok:
+                # circuit just tripped during this batch, stop immediately
+                logger.warning(f'Circuit breaker tripped mid-batch for job {job.job_id}, stopping after {i} items')
+                self.db.update_job_status(job.job_id, 'failed')
                 break
 
-            # Get next pending item
+            # get next pending item
             item = self.db.get_next_pending_item(job.job_id)
 
             if not item:
-                # No more pending items - check if job is complete
+                # no more pending items - check if job is complete
+                logger.info(f'No more pending items for job {job.job_id}')
                 await self.check_and_finalize_job(job)
                 break
 
-            # Update status IMMEDIATELY to prevent duplicate queueing
+            logger.info(f'Got pending item: {item.item_id} for job {job.job_id}')
+
+            # update status IMMEDIATELY to prevent duplicate queueing
             # This must happen before we add to items_to_queue
             self.db.update_item_status(job.job_id, item.item_id, 'queued')
 
             items_to_queue.append(item)
 
-        # If we have items to queue, push them in batch to SQS
+        # if we have items to queue, push them in batch to SQS
         if items_to_queue:
             # Push to SQS using enqueue method (takes sequence of JobItem)
             self.queue.enqueue(items_to_queue)
 
-            logger.debug(f"Scheduled {len(items_to_queue)} item(s) for job {job.job_id}")
-
-    def get_rate_limiter(self, job: Job) -> TokenBucket:
-        """
-        Get or create rate limiter for job.
-
-        Args:
-            job: Job to get rate limiter for
-
-        Returns:
-            TokenBucket for this job
-        """
-        if job.job_id not in self.rate_limiters:
-            # Read rate from ExecutionPolicy.throttling
-            if job.execution_policy and job.execution_policy.throttling:
-                policy = job.execution_policy.throttling
-                rate = policy.rate_limit_per_second
-                # Use concurrent_requests as burst capacity
-                burst = float(policy.concurrent_requests)
-            else:
-                # Default: 1 req/s with burst of 5
-                rate = 1.0
-                burst = 5.0
-
-            self.rate_limiters[job.job_id] = TokenBucket(rate=rate, burst=burst)
-            logger.info(f"Created rate limiter for job {job.job_id}: {rate} req/s, burst {burst}")
-
-        return self.rate_limiters[job.job_id]
+            logger.info(f'Scheduled {len(items_to_queue)} item(s) for job {job.job_id}')
 
     def get_circuit_breaker(self, job: Job) -> CircuitBreaker:
         """
@@ -238,8 +215,7 @@ class JobScheduler:
                     job_id=job.job_id,
                     min_requests=policy.min_requests,
                     failure_threshold_percentage=policy.failure_threshold_percentage,
-                    consecutive_failure_threshold=20,  # hardcoded for now
-                    open_duration_seconds=policy.open_circuit_seconds
+                    consecutive_failure_threshold=20  # hardcoded for now
                 )
             else:
                 # Default circuit breaker settings
@@ -247,8 +223,7 @@ class JobScheduler:
                     job_id=job.job_id,
                     min_requests=50,
                     failure_threshold_percentage=0.5,
-                    consecutive_failure_threshold=20,
-                    open_duration_seconds=300
+                    consecutive_failure_threshold=20
                 )
 
             logger.info(f"Created circuit breaker for job {job.job_id}")
@@ -256,20 +231,20 @@ class JobScheduler:
         return self.circuit_breakers[job.job_id]
 
     def cleanup_finished_jobs(self):
-        """Remove rate limiters for completed jobs to free memory"""
+        """Remove circuit breakers for completed jobs to free memory"""
         # Get list of active job IDs
         active_jobs = self.db.get_active_jobs()
         active_job_ids = {job.job_id for job in active_jobs}
 
-        # Remove limiters for jobs that are no longer active
+        # Remove circuit breakers for jobs that are no longer active
         removed = 0
-        for job_id in list(self.rate_limiters.keys()):
+        for job_id in list(self.circuit_breakers.keys()):
             if job_id not in active_job_ids:
-                del self.rate_limiters[job_id]
+                del self.circuit_breakers[job_id]
                 removed += 1
 
         if removed > 0:
-            logger.info(f'Cleaned up {removed} rate limiter(s) for finished jobs')
+            logger.info(f'Cleaned up {removed} circuit breaker(s) for finished jobs')
 
     async def check_and_finalize_job(self, job: Job) -> bool:
         """
@@ -285,7 +260,7 @@ class JobScheduler:
         status_summary = self.db.get_job_status(job.job_id)
 
         # Count incomplete items
-        incomplete = status_summary.pending + status_summary.queued + status_summary.running
+        incomplete = status_summary.pending + status_summary.queued + status_summary.in_progress
 
         if incomplete > 0:
             # Job still has items to process
@@ -362,7 +337,7 @@ class JobScheduler:
                 if item.status == 'success':
                     success_count += 1
                     success_batch.append(item)
-                elif item.status in ('error', 'retrying'):
+                elif item.status == 'failed':
                     error_count += 1
                     error_batch.append(item)
 

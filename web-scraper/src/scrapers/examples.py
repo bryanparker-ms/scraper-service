@@ -72,12 +72,12 @@ class ExampleHttpScraper(BaseHttpScraper):
     version='1.0.0',
     description='Simple mock scraper for testing that returns static data'
 )
-class ExampleScraper:
+class ExampleScraper(BaseHttpScraper):
     """
     Simple mock scraper for basic testing (backwards compatibility).
     """
 
-    async def scrape(self, job_item: JobItem) -> ScrapeResult:
+    async def do_scrape(self, client: httpx.AsyncClient, job_item: JobItem) -> ScrapeResult:
         """Mock implementation that returns test data."""
         mock_html = f"""
         <html>
@@ -105,3 +105,18 @@ class ExampleScraper:
             data=extracted_data,
             screenshot=None
         )
+
+
+@registry.register(
+    scraper_id='example-fail',
+    name='Example Scraper that fails',
+    version='1.0.0',
+    description='Simple scraper for testing that fails'
+)
+class ExampleFailScraper(BaseHttpScraper):
+    """
+    Simple scraper for testing that fails.
+    """
+
+    async def do_scrape(self, client: httpx.AsyncClient, job_item: JobItem) -> ScrapeResult:
+        raise ValueError('This is a test failure')

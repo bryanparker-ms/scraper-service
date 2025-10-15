@@ -203,17 +203,17 @@ class DynamoDBDatabaseService(DatabaseService):
         error_type: RetryableError | NonRetryableError,
         error_message: str,
         retry_count: int,
-        last_attempt_at: str
+        last_attempt_at: str,
+        max_retries: int = 3
     ) -> None:
-        """Update job item with error status and details."""
-        # Determine if this should be marked as 'error' or 'retrying'
-        # Based on whether it's a retryable error
-        from src.shared.models import JobItem as JobItemModel
-        is_retryable = JobItemModel.is_retryable_error(error_type)
+        """
+        Update job item with failed status and error details.
 
-        # TODO: Also check retry_count against max_retries from execution policy
-        # For now, we'll use status 'error' for non-retryable, 'retrying' for retryable
-        status: JobItemStatus = 'retrying' if is_retryable else 'error'
+        Note: This should only be called when retries are exhausted (handled by scraper).
+        The scraper retries internally, so by the time this is called, the item has failed
+        permanently and should be marked as 'failed'.
+        """
+        status: JobItemStatus = 'failed'
 
         self.ddb_client.update_item(
             TableName=self.settings.table_name,
@@ -249,9 +249,9 @@ class DynamoDBDatabaseService(DatabaseService):
 
     def get_active_jobs(self) -> list[Job]:
         """
-        Get all jobs that have queued items (for scheduler).
+        Get all jobs that need scheduling (for scheduler).
 
-        Returns jobs that are not yet completed.
+        Returns jobs that are not yet completed, failed, or paused.
         """
         jobs: list[Job] = []
         start_key: Mapping[str, AttributeValueTypeDef] = {}
@@ -259,7 +259,7 @@ class DynamoDBDatabaseService(DatabaseService):
         while True:
             scan_params: dict[str, Any] = {
                 'TableName': self.settings.table_name,
-                'FilterExpression': '#type = :type AND #sk = :sk AND attribute_exists(#status) AND #status <> :completed',
+                'FilterExpression': '#type = :type AND #sk = :sk AND attribute_exists(#status) AND #status <> :completed AND #status <> :failed AND #status <> :paused',
                 'ExpressionAttributeNames': {
                     '#type': 'type',
                     '#sk': 'sk',
@@ -268,7 +268,9 @@ class DynamoDBDatabaseService(DatabaseService):
                 'ExpressionAttributeValues': {
                     ':type': {'S': 'job'},
                     ':sk': {'S': 'META'},
-                    ':completed': {'S': 'completed'}
+                    ':completed': {'S': 'completed'},
+                    ':failed': {'S': 'failed'},
+                    ':paused': {'S': 'paused'}
                 },
                 'Limit': self.settings.ddb_page_limit,
                 'ConsistentRead': False,
@@ -294,27 +296,63 @@ class DynamoDBDatabaseService(DatabaseService):
         Get next pending item for a job (for scheduler).
 
         Returns the first item with status='pending'.
-        """
-        resp = self.ddb_client.query(
-            TableName=self.settings.table_name,
-            KeyConditionExpression='pk = :pk AND begins_with(sk, :sk_prefix)',
-            FilterExpression='#status = :status',
-            ExpressionAttributeNames={
-                '#status': 'status'
-            },
-            ExpressionAttributeValues={
-                ':pk': {'S': job_pk(job_id)},
-                ':sk_prefix': {'S': 'item#'},
-                ':status': {'S': 'pending'}
-            },
-            Limit=1,
-            ConsistentRead=True
-        )
 
-        items = resp.get('Items', [])
-        if items:
-            return JobItem.model_validate(_from_ddb_item(items[0]))
-        return None
+        Due to how DynamoDB Limit works with FilterExpression, we need to scan
+        through items to find pending ones. This function will scan through all
+        items until it finds one with status='pending' or reaches the end.
+
+        The query uses pagination to scan through items efficiently in batches of 100.
+
+        Args:
+            job_id: Job ID to search
+
+        Returns:
+            Next pending JobItem, or None if no pending items found
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        start_key: Mapping[str, AttributeValueTypeDef] = {}
+        scanned_total = 0
+
+        while True:
+            query_params: dict[str, Any] = {
+                'TableName': self.settings.table_name,
+                'KeyConditionExpression': 'pk = :pk AND begins_with(sk, :sk_prefix)',
+                'FilterExpression': '#status = :status',
+                'ExpressionAttributeNames': {
+                    '#status': 'status'
+                },
+                'ExpressionAttributeValues': {
+                    ':pk': {'S': job_pk(job_id)},
+                    ':sk_prefix': {'S': 'item#'},
+                    ':status': {'S': 'pending'}
+                },
+                'Limit': 100,  # Scan in chunks of 100
+                'ConsistentRead': True
+            }
+
+            if start_key:
+                query_params['ExclusiveStartKey'] = start_key
+
+            resp = self.ddb_client.query(**query_params)
+
+            scanned_total += resp.get('ScannedCount', 0)
+            items = resp.get('Items', [])
+
+            if items:
+                # Found a pending item!
+                item = JobItem.model_validate(_from_ddb_item(items[0]))
+                logger.info(f"Found pending item {item.item_id} after scanning {scanned_total} items")
+                return item
+
+            # No matches in this batch, continue if there are more items
+            if 'LastEvaluatedKey' not in resp:
+                # Reached end of all items, no pending items found
+                logger.info(f"No pending items found after scanning all {scanned_total} items")
+                return None
+
+            start_key = resp['LastEvaluatedKey']
 
     def update_item_status(self, job_id: str, item_id: str, status: JobItemStatus) -> None:
         """
@@ -346,9 +384,9 @@ class DynamoDBDatabaseService(DatabaseService):
         """
         Get failure metrics for circuit breaker.
 
-        Query items with status in ('success', 'error', 'retrying') to calculate:
+        Query items with status in ('success', 'failed') to calculate:
         - success_count: Number of successful items
-        - error_count: Number of failed items (error + retrying)
+        - error_count: Number of failed items
         - consecutive_errors: Consecutive errors from most recent items
 
         Returns:
@@ -362,7 +400,7 @@ class DynamoDBDatabaseService(DatabaseService):
             query_params: dict[str, Any] = {
                 'TableName': self.settings.table_name,
                 'KeyConditionExpression': 'pk = :pk AND begins_with(sk, :sk_prefix)',
-                'FilterExpression': '#status IN (:success, :error, :retrying)',
+                'FilterExpression': '#status IN (:success, :failed)',
                 'ExpressionAttributeNames': {
                     '#status': 'status'
                 },
@@ -370,8 +408,7 @@ class DynamoDBDatabaseService(DatabaseService):
                     ':pk': {'S': job_pk(job_id)},
                     ':sk_prefix': {'S': 'item#'},
                     ':success': {'S': 'success'},
-                    ':error': {'S': 'error'},
-                    ':retrying': {'S': 'retrying'}
+                    ':failed': {'S': 'failed'}
                 },
                 'ConsistentRead': True,
             }
@@ -390,21 +427,20 @@ class DynamoDBDatabaseService(DatabaseService):
 
             start_key = resp['LastEvaluatedKey']
 
-        # Count successes and errors
+        # count successes and errors
         success_count = sum(1 for item in items if item.get('status') == 'success')
-        error_count = sum(1 for item in items if item.get('status') in ('error', 'retrying'))
+        error_count = sum(1 for item in items if item.get('status') == 'failed')
 
-        # Sort by last_attempt_at to get chronological order (most recent last)
-        # Items without last_attempt_at go to beginning
+        # sort by last_attempt_at to get chronological order (most recent last). items without last_attempt_at go to beginning
         sorted_items = sorted(
             items,
             key=lambda x: x.get('last_attempt_at', '1970-01-01T00:00:00Z')
         )
 
-        # Count consecutive errors from the end (most recent)
+        # count consecutive errors from the end (most recent)
         consecutive_errors = 0
         for item in reversed(sorted_items):
-            if item.get('status') in ('error', 'retrying'):
+            if item.get('status') == 'failed':
                 consecutive_errors += 1
             elif item.get('status') == 'success':
                 # Hit a success, stop counting
@@ -474,7 +510,11 @@ class DynamoDBDatabaseService(DatabaseService):
             resp = self.ddb_client.query(**query_params)
 
             for item in resp.get('Items', []):
-                batch.append(JobItem.model_validate(_from_ddb_item(item)))
+                deserialized = _from_ddb_item(item)
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"Deserializing item: pk={deserialized.get('pk')}, sk={deserialized.get('sk')}, keys={list(deserialized.keys())}")
+                batch.append(JobItem.model_validate(deserialized))
 
                 # Yield batch when it reaches batch_size
                 if len(batch) >= batch_size:

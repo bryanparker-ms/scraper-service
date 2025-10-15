@@ -11,7 +11,7 @@ from src.worker.scraper import BaseHttpScraper, ScraperError
 @registry.register(
     scraper_id='maricopa-az',
     name='Maricopa County, AZ',
-    version='0.0.1',
+    version='1.0.0',
     description='Maricopa County, AZ scraper'
 )
 class MaricopaAZHttpScraper(BaseHttpScraper):
@@ -76,3 +76,45 @@ class MaricopaAZHttpScraper(BaseHttpScraper):
             html=html_content,
             data=extracted_data,
         )
+
+"""
+Example requests:
+
+curl -X POST http://localhost:8000/jobs \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "job_name": "Test Maricopa",
+        "scraper_id": "maricopa-az",
+        "items": [
+            {"item_id":"200-14-030","input":{"parcel_number":"200-14-030"}}
+        ]
+    }'
+
+
+curl -X POST http://localhost:8000/jobs \
+    -H 'Content-Type: application/json' \
+    -d '{
+        "job_name": "Test Maricopa with Proxy",
+        "scraper_id": "maricopa-az",
+        "execution_policy": {
+            "proxy": {
+                "type": "residential",
+                "geo_target": {
+                    "state": "AZ"
+                }
+            },
+            "retries": {
+                "max_retries": 3,
+                "backoff_strategy": "exponential",
+                "backoff_factor": 1.0
+            },
+            "timeouts": {
+                "connect_timeout_seconds": 10,
+                "request_timeout_seconds": 30
+            }
+        },
+        "items": [
+            {"item_id":"200-14-030","input":{"parcel_number":"200-14-030"}}
+        ]
+    }'
+"""
