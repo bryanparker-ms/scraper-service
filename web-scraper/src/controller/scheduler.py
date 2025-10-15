@@ -132,7 +132,7 @@ class JobScheduler:
                 self.db.update_job_status(job.job_id, 'failed')
                 return
 
-        # Step 3: Check rate limiting (per-item delay)
+        # step 3: Check rate limiting (per-item delay)
         min_delay = 0.0
         if job.execution_policy and job.execution_policy.throttling:
             min_delay = job.execution_policy.throttling.min_delay_between_items_seconds
@@ -145,20 +145,19 @@ class JobScheduler:
                 logger.debug(f'Job {job.job_id} rate limited: {elapsed:.1f}s elapsed < {min_delay}s required')
                 return
 
-        # Step 4: Calculate available slots
+        # step 4: Calculate available slots
         max_concurrent = DEFAULT_MAX_CONCURRENT_WORKERS
         if job.execution_policy and job.execution_policy.throttling:
             max_concurrent = job.execution_policy.throttling.max_concurrent_workers
 
-        # At capacity? Skip
+        # are we at capacity? if so, skip
         if in_flight >= max_concurrent:
             logger.info(f'Job {job.job_id} at capacity ({in_flight}/{max_concurrent}), skipping')
             return
 
-        # Calculate how many items to queue
-        # Per-item rate limiting: queue 1 item at a time
+        # calculate how many items to queue. per-item rate limiting: queue 1 item at a time
         items_to_queue_count = 1 if min_delay > 0 else min(max_concurrent - in_flight, 10)
-        items_to_queue_count = min(items_to_queue_count, status_summary.pending)  # Don't queue more than exists
+        items_to_queue_count = min(items_to_queue_count, status_summary.pending)  # don't queue more than exists
 
         # no items to queue?
         if items_to_queue_count <= 0:
@@ -184,7 +183,6 @@ class JobScheduler:
             self.db.update_item_status(job.job_id, item.item_id, 'queued')
             items_to_queue.append(item)
 
-        # Queue to SQS
         if items_to_queue:
             self.queue.enqueue(items_to_queue)
             self.last_queue_time[job.job_id] = time.time()  # Update last queue time for rate limiting
