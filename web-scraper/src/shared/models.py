@@ -9,6 +9,8 @@ NonRetryableError = Literal['no_results', 'not_found', 'invalid_input']
 JobStatus = Literal['created', 'queued', 'in_progress', 'paused', 'completed', 'failed']
 JobItemStatus = Literal['pending', 'queued', 'in_progress', 'success', 'failed']
 
+DEFAULT_MAX_CONCURRENT_WORKERS: int = 3
+
 """
 Job models
 """
@@ -42,13 +44,17 @@ class JobItem(BaseModel):
 
 class ThrottlingPolicy(BaseModel):
     """
-    Concurrency control policy to prevent overwhelming target websites.
+    Throttling policy to prevent overwhelming target websites.
 
-    Controls the maximum number of workers that can process items from
-    the same job simultaneously. This prevents too many concurrent connections
-    to the same website, reducing the risk of being blocked or banned.
+    Controls both:
+    - Concurrency: Maximum workers processing items simultaneously
+    - Rate: Minimum time between queueing items
+
+    This prevents overwhelming target websites with both concurrent connections
+    and request frequency, reducing the risk of being blocked or banned.
     """
-    max_concurrent_workers: int = 3  # Maximum workers processing this job at once
+    max_concurrent_workers: int = DEFAULT_MAX_CONCURRENT_WORKERS  # Maximum workers processing this job at once
+    min_delay_between_items_seconds: float = 0.0  # Minimum seconds between queueing items (0 = no delay)
 
 
 class ProxyGeolocationPolicy(BaseModel):

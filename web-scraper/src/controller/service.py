@@ -1,3 +1,4 @@
+import logging
 import uuid
 import json
 from typing import Any, Literal
@@ -9,14 +10,19 @@ from src.shared.queue import SqsQueue
 from src.shared.settings import Settings
 from src.shared.storage import S3ResultStorage
 
+logger = logging.getLogger(__name__)
+
 
 settings = Settings()
 db = DynamoDBDatabaseService(settings)
 queue = SqsQueue(settings)
 storage = S3ResultStorage(settings)
 
-def get_latest_jobs() -> GetJobsResponse:
-    jobs = db.get_jobs()
+def get_latest_jobs(n: int = 100) -> GetJobsResponse:
+    """
+    Get the last `n` jobs
+    """
+    jobs = db.get_jobs(n)
 
     summaries = [JobSummary(
         job_id=job.job_id,
@@ -30,6 +36,9 @@ def get_latest_jobs() -> GetJobsResponse:
 
 
 def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
+    """
+    Create a new job.
+    """
     job_id = request.job_id or str(uuid.uuid4())
 
     if db.job_exists(job_id):
@@ -51,11 +60,7 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
 
     db.create_job_if_not_exists(job)
 
-    # Create job items with status='pending'
-    # The scheduler will pick these up and push to SQS at the configured rate
-    import logging
-    logger = logging.getLogger(__name__)
-
+    # create job items with status='pending'. the scheduler will pick these up and push to SQS at the configured rate.
     for item in request.items:
         job_item = JobItem(
             job_id=job_id,
@@ -65,15 +70,16 @@ def create_job(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
             retry_count=0
         )
 
-        logger.info(f"Creating job item {item.item_id} with status={job_item.status}")
         db.create_job_item(job_id, job_item)
 
-    # No SQS push here! Scheduler handles rate-limited queueing
-    logger.info(f"Created {len(request.items)} job items for job {job_id}")
+    logger.info(f'Created {len(request.items)} job items for job {job_id}')
     return CreateJobResponse(job_id=job_id, seeded_count=len(request.items))
 
 
 def get_job_status(job_id: str) -> JobStatusResponse | ErrorResponse:
+    """
+    Get the status of a job.
+    """
     if not db.job_exists(job_id):
         return ErrorResponse(status=404, message='Job not found')
 
@@ -87,6 +93,9 @@ def get_queue_length() -> int:
 
 
 def purge_queue() -> None:
+    """
+    Purge the queue of all messages.
+    """
     queue.purge()
 
     return None
@@ -94,7 +103,7 @@ def purge_queue() -> None:
 
 async def get_job_results(
     job_id: str,
-    filter: Literal['all', 'success', 'errors'] | None = None,
+    filter: Literal['all', 'success', 'errors'] = 'all',
     part: int | None = None
 ) -> dict[str, Any] | ErrorResponse:
     """
@@ -113,23 +122,22 @@ async def get_job_results(
 
     job = db.get_job(job_id)
 
-    # Job must be completed to have results
+    # job must be completed to have results
     if job.status != 'completed':
         return ErrorResponse(
             status=400,
             message=f'Job is not completed yet (status: {job.status}). Results are only available for completed jobs.'
         )
 
-    # Download job metadata from S3
     try:
-        metadata_key = f"{job_id}/job_metadata.json"
+        metadata_key = f'{job_id}/job_metadata.json'
         metadata = await storage.download_json(metadata_key)
 
-        # Validate that metadata is a dict, not a list
+        # validate that metadata is a dict
         if not isinstance(metadata, dict):
             return ErrorResponse(
                 status=500,
-                message='Invalid metadata format: expected object, got array'
+                message='Invalid metadata format: expected object'
             )
     except Exception as e:
         return ErrorResponse(
@@ -137,35 +145,34 @@ async def get_job_results(
             message=f'Failed to retrieve job metadata: {str(e)}'
         )
 
-    # Determine which manifest to fetch based on filter
-    filter_type = filter or 'all'
+    # determine which manifest to fetch based on filter
     manifest_prefix = {
         'all': 'manifests/full',
         'success': 'manifests/success',
         'errors': 'manifests/errors'
-    }[filter_type]
+    }[filter]
 
-    # Get manifest info from metadata
+    # get manifest info from metadata
     manifest_info = metadata.get('manifest_info', {})
     part_counts = {
         'all': manifest_info.get('full_parts', 0),
         'success': manifest_info.get('success_parts', 0),
         'errors': manifest_info.get('error_parts', 0)
     }
-    total_parts = part_counts[filter_type]
+    total_parts = part_counts[filter]
 
-    # If no specific part requested, return metadata + links to all parts
+    # if no specific part requested, return metadata + links to all parts
     if part is None:
         response = {
             'job_id': job_id,
             'metadata': metadata,
             'manifest': {
-                'filter': filter_type,
+                'filter': filter,
                 'total_parts': total_parts,
                 'parts': [
                     {
                         'part': i,
-                        'url': f"/jobs/{job_id}/results?filter={filter_type}&part={i}"
+                        'url': f'/jobs/{job_id}/results?filter={filter}&part={i}'
                     }
                     for i in range(total_parts)
                 ]
@@ -173,21 +180,21 @@ async def get_job_results(
         }
         return response
 
-    # Validate part number
+    # validate part number
     if part < 0 or part >= total_parts:
         return ErrorResponse(
             status=400,
             message=f'Invalid part number {part}. Valid range: 0-{total_parts - 1}'
         )
 
-    # Download specific manifest part
+    # download specific manifest part
     try:
-        manifest_key = f"{job_id}/{manifest_prefix}/part-{part}.json"
+        manifest_key = f'{job_id}/{manifest_prefix}/part-{part}.json'
         manifest_data = await storage.download_json(manifest_key)
 
         return {
             'job_id': job_id,
-            'filter': filter_type,
+            'filter': filter,
             'part': part,
             'total_parts': total_parts,
             'data': manifest_data
@@ -215,20 +222,20 @@ async def download_job_item(
     Returns:
         File content as HTTP response
     """
-    # Check if job and item exist
+    # check if job and item exist
     try:
         job_item = db.get_job_item(job_id, item_id)
     except Exception:
         return ErrorResponse(status=404, message='Job item not found')
 
-    # Item must be completed successfully
+    # item must be completed successfully
     if job_item.status != 'success':
         return ErrorResponse(
             status=400,
             message=f'Item status is {job_item.status}. Only successful items can be downloaded.'
         )
 
-    # Download the requested artifact from S3
+    # download the requested artifact from S3
     try:
         if artifact == 'html':
             content = await storage.get_html(job_id, item_id)
