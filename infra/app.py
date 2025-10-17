@@ -8,7 +8,7 @@ load_dotenv()
 
 
 app = cdk.App()
-InfraStack(app, "InfraStack",
+InfraStack(app, 'web-scraper-infra',
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
     # but a single synthesized template can be deployed anywhere.
