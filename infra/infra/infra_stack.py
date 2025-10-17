@@ -332,28 +332,27 @@ class InfraStack(Stack):
             max_capacity=10
         )
 
-        # Scale based on SQS queue depth
+        # Scale based on SQS queue depth using step scaling
+        # Sets exact capacity based on queue depth ranges
         worker_scaling.scale_on_metric(
             'SqsQueueDepth',
             metric=cloudwatch.Metric(
                 namespace='AWS/SQS',
                 metric_name='ApproximateNumberOfVisibleMessages',
-                dimensions_map={'QueueName': 'web-scraper-job-queue-with-dlq'}
+                dimensions_map={'QueueName': 'web-scraper-job-queue-with-dlq'},
+                statistic='Average',
+                period=Duration.seconds(60)
             ),
             scaling_steps=[
-                autoscaling.ScalingInterval(upper=0, change=0),      # 0 messages = 0 workers
-                autoscaling.ScalingInterval(upper=5, change=1),      # 1-5 messages = 1 worker
-                autoscaling.ScalingInterval(upper=20, change=2),     # 6-20 messages = 2 workers
-                autoscaling.ScalingInterval(lower=20, change=5)      # 20+ messages = 5 workers
+                autoscaling.ScalingInterval(lower=0, upper=0, change=0),      # 0 messages = 0 workers
+                autoscaling.ScalingInterval(lower=1, upper=25, change=1),     # 1-25 messages = 1 worker
+                autoscaling.ScalingInterval(lower=26, upper=100, change=2),   # 26-100 messages = 2 workers
+                autoscaling.ScalingInterval(lower=101, upper=250, change=5),  # 101-250 messages = 5 workers
+                autoscaling.ScalingInterval(lower=251, change=10)             # 251+ messages = 10 workers
             ],
-            adjustment_type=autoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
-            cooldown=Duration.seconds(60)  # Wait 1 minute before scaling down
-        )
-
-        # Scale based on CPU utilization
-        worker_scaling.scale_on_cpu_utilization(
-            'CpuScaling',
-            target_utilization_percent=70
+            adjustment_type=autoscaling.AdjustmentType.EXACT_CAPACITY,
+            cooldown=Duration.seconds(120),          # Scale out cooldown: wait 2 min before scaling up again
+            scale_in_cooldown=Duration.seconds(300)  # Scale in cooldown: wait 5 min before scaling down (avoid thrashing)
         )
 
         # Outputs
