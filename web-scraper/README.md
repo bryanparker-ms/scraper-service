@@ -2,6 +2,28 @@
 
 A distributed web scraping service built with FastAPI, AWS SQS, and DynamoDB. The service provides a robust framework for executing scrapers at scale with features like concurrency control, circuit breakers, retry logic, and proxy support.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Setup](#setup)
+  - [Prerequisites](#prerequisites)
+  - [Installation](#installation)
+- [Running the Service](#running-the-service)
+  - [Local Development](#local-development)
+  - [API Client CLI](#api-client-cli)
+  - [Testing Scrapers Locally](#testing-scrapers-locally)
+- [API Routes](#api-routes)
+  - [List Jobs](#list-jobs)
+  - [Create Job](#create-job)
+  - [Get Job Status](#get-job-status)
+  - [Get Job Results](#get-job-results)
+  - [Download Job Item Artifact](#download-job-item-artifact)
+  - [Get Queue Length](#get-queue-length)
+  - [Purge Queue](#purge-queue)
+- [Deployment](#deployment)
+- [Writing Custom Scrapers](#writing-custom-scrapers)
+- [Features](#features)
+
 ## Overview
 
 The web scraper service consists of three main components:
