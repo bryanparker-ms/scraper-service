@@ -1,4 +1,4 @@
-# Web Scraper Service
+# 🕷️ Web Scraper Service
 
 A distributed web scraping service built with FastAPI, AWS SQS, and DynamoDB. The service provides a robust framework for executing scrapers at scale with features like concurrency control, circuit breakers, retry logic, and proxy support.
 
@@ -278,27 +278,32 @@ curl -X POST http://localhost:8000/jobs \
 The execution policy allows fine-grained control over how your scraping job runs:
 
 **Throttling:**
-- `max_concurrent_workers`: Maximum number of items being processed simultaneously (includes both queued and in-progress items). Use this to avoid overwhelming target websites. Default: unlimited
-- `min_delay_between_items_seconds`: Minimum delay between queueing items to SQS. Useful for rate-limiting job submission. Optional
+
+-   `max_concurrent_workers`: Maximum number of items being processed simultaneously (includes both queued and in-progress items). Use this to avoid overwhelming target websites. Default: unlimited
+-   `min_delay_between_items_seconds`: Minimum delay between queueing items to SQS. Useful for rate-limiting job submission. Optional
 
 **Circuit Breaker:**
-- `min_requests`: Minimum number of items that must be processed before the circuit breaker can trip. This prevents premature failures on small jobs. Default: 10
-- `failure_threshold_percentage`: Percentage of failures (0.0-1.0) that will trip the circuit breaker and fail the entire job. For example, 0.5 means the job fails if 50% of items fail. Default: 0.8
+
+-   `min_requests`: Minimum number of items that must be processed before the circuit breaker can trip. This prevents premature failures on small jobs. Default: 10
+-   `failure_threshold_percentage`: Percentage of failures (0.0-1.0) that will trip the circuit breaker and fail the entire job. For example, 0.5 means the job fails if 50% of items fail. Default: 0.8
 
 **Retries:**
-- `max_retries`: Maximum number of retry attempts for failed items. Default: 3
-- `backoff_strategy`: Strategy for calculating retry delays. Options: `exponential` (2^attempt * factor) or `linear` (attempt * factor). Default: exponential
-- `backoff_factor`: Base multiplier for backoff delays in seconds. Default: 1.0
+
+-   `max_retries`: Maximum number of retry attempts for failed items. Default: 3
+-   `backoff_strategy`: Strategy for calculating retry delays. Options: `exponential` (2^attempt _ factor) or `linear` (attempt _ factor). Default: exponential
+-   `backoff_factor`: Base multiplier for backoff delays in seconds. Default: 1.0
 
 **Timeouts:**
-- `connect_timeout_seconds`: Maximum time to wait for connection establishment. Default: 10
-- `request_timeout_seconds`: Maximum time to wait for complete response. Default: 30
+
+-   `connect_timeout_seconds`: Maximum time to wait for connection establishment. Default: 10
+-   `request_timeout_seconds`: Maximum time to wait for complete response. Default: 30
 
 **Proxy:**
-- `type`: Proxy type to use. Options: `datacenter`, `residential`, `web-unlocker`, `isp`. Requires BrightData credentials configured
-- `geo_target`: Geographic targeting for residential proxies
-  - `state`: US state code (e.g., "CA", "NY", "AZ") - only supported for residential proxies
-  - `city`: City name (e.g., "los_angeles") - only supported for residential proxies
+
+-   `type`: Proxy type to use. Options: `datacenter`, `residential`, `web-unlocker`, `isp`. Requires BrightData credentials configured
+-   `geo_target`: Geographic targeting for residential proxies
+    -   `state`: US state code (e.g., "CA", "NY", "AZ") - only supported for residential proxies
+    -   `city`: City name (e.g., "los_angeles") - only supported for residential proxies
 
 ### Get Job Status
 
