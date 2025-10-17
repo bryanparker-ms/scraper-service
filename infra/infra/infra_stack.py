@@ -351,8 +351,7 @@ class InfraStack(Stack):
                 autoscaling.ScalingInterval(lower=251, change=10)             # 251+ messages = 10 workers
             ],
             adjustment_type=autoscaling.AdjustmentType.EXACT_CAPACITY,
-            cooldown=Duration.seconds(120),          # Scale out cooldown: wait 2 min before scaling up again
-            scale_in_cooldown=Duration.seconds(300)  # Scale in cooldown: wait 5 min before scaling down (avoid thrashing)
+            cooldown=Duration.seconds(300)  # Cooldown period between scaling actions (5 min to avoid thrashing)
         )
 
         # Outputs
