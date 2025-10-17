@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Response, Query
+from fastapi import FastAPI, Response, Query, Security, HTTPException, status
+from fastapi.security import APIKeyHeader
 from typing import Any, Literal
 import asyncio
 import logging
@@ -14,6 +15,26 @@ logger = logging.getLogger(__name__)
 # Initialize scheduler
 settings = Settings()
 scheduler = JobScheduler(settings)
+
+# API Key authentication
+api_key_header = APIKeyHeader(name='X-API-Key', auto_error=False)
+
+def verify_api_key(api_key: str = Security(api_key_header)) -> str:
+    """Verify API key from request header"""
+    expected_key = settings.api_key
+
+    # If no API key is configured, allow all requests (for local development)
+    if not expected_key:
+        logger.warning('No API key configured - authentication is disabled')
+        return 'unauthenticated'
+
+    if not api_key or api_key != expected_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail='Invalid or missing API key'
+        )
+
+    return api_key
 
 
 @asynccontextmanager
@@ -57,27 +78,27 @@ app = FastAPI(title='Web Scraper Controller', lifespan=lifespan)
 
 
 @app.get('/jobs')
-def get_jobs_route() -> GetJobsResponse | ErrorResponse:
+def get_jobs_route(api_key: str = Security(verify_api_key)) -> GetJobsResponse | ErrorResponse:
     return get_latest_jobs()
 
 
 @app.post('/jobs')
-def create_job_route(request: CreateJobRequest) -> CreateJobResponse | ErrorResponse:
+def create_job_route(request: CreateJobRequest, api_key: str = Security(verify_api_key)) -> CreateJobResponse | ErrorResponse:
     return create_job(request)
 
 
 @app.get('/jobs/{job_id}/status')
-def get_job_status_route(job_id: str) -> JobStatusResponse | ErrorResponse:
+def get_job_status_route(job_id: str, api_key: str = Security(verify_api_key)) -> JobStatusResponse | ErrorResponse:
     return get_job_status(job_id)
 
 
 @app.get('/jobs/queue/length')
-def get_queue_length_route() -> int:
+def get_queue_length_route(api_key: str = Security(verify_api_key)) -> int:
     return get_queue_length()
 
 
 @app.post('/jobs/queue/purge')
-def purge_queue_route() -> Response:
+def purge_queue_route(api_key: str = Security(verify_api_key)) -> Response:
     purge_queue()
 
     return Response(status_code=200)
@@ -87,7 +108,8 @@ def purge_queue_route() -> Response:
 async def get_job_results_route(
     job_id: str,
     filter: Literal['all', 'success', 'errors'] | None = Query(None, description="Filter results by status"),
-    part: int | None = Query(None, description='Specific manifest part to retrieve (0-indexed)')
+    part: int | None = Query(None, description='Specific manifest part to retrieve (0-indexed)'),
+    api_key: str = Security(verify_api_key)
 ) -> dict[str, Any] | ErrorResponse:
     """
     Get job results/manifest.
@@ -102,7 +124,8 @@ async def get_job_results_route(
 async def download_job_item_route(
     job_id: str,
     item_id: str,
-    artifact: Literal['html', 'data', 'metadata', 'screenshot'] = Query('html', description='Which artifact to download')
+    artifact: Literal['html', 'data', 'metadata', 'screenshot'] = Query('html', description='Which artifact to download'),
+    api_key: str = Security(verify_api_key)
 ):
     """
     Download a specific artifact for a job item.

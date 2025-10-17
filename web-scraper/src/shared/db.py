@@ -531,13 +531,17 @@ class DynamoDBDatabaseService(DatabaseService):
             yield batch
 
     def __create_ddb_client(self, settings: Settings) -> DynamoDBClient:
-        return boto3.client(
-            'dynamodb',
-            config=settings.boto_config,
-            region_name=settings.aws_region,
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-        )
+        client_kwargs: dict[str, Any] = {
+            'config': settings.boto_config,
+            'region_name': settings.aws_region,
+        }
+
+        # Only add credentials if they're provided (for local development)
+        if settings.aws_access_key_id and settings.aws_secret_access_key:
+            client_kwargs['aws_access_key_id'] = settings.aws_access_key_id
+            client_kwargs['aws_secret_access_key'] = settings.aws_secret_access_key
+
+        return boto3.client('dynamodb', **client_kwargs)
 
 
 def _to_ddb_item(item: dict[str, Any]) -> dict[str, AttributeValueTypeDef]:

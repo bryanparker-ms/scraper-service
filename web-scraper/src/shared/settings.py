@@ -20,13 +20,14 @@ class Settings(BaseModel):
     visibility_timeout: int = Field(default=60 * 3) # 3 minutes
     use_local_storage: bool = Field(default=False)
     local_storage_path: str = Field(default='./storage')
+    api_key: str = Field(default='')
 
     def model_post_init(self, __context: Any):
         load_dotenv()
 
         self.aws_region = get('AWS_REGION', 'us-east-1')
-        self.aws_access_key_id = get_or_throw('AWS_ACCESS_KEY_ID')
-        self.aws_secret_access_key = get_or_throw('AWS_SECRET_ACCESS_KEY')
+        self.aws_access_key_id = get('AWS_ACCESS_KEY_ID', '')
+        self.aws_secret_access_key = get('AWS_SECRET_ACCESS_KEY', '')
         self.table_name = get('TABLE_NAME', 'scrape-state')
         self.queue_url = get_or_throw('WEB_SCRAPER_QUEUE_URL')
         self.bucket_name = get('WEB_SCRAPER_RESULTS_BUCKET', 'scrape-results')
@@ -34,6 +35,7 @@ class Settings(BaseModel):
         self.visibility_timeout = int(get('WEB_SCRAPER_QUEUE_MESSAGE_VISIBILITY_SECS', '180'))
         self.use_local_storage = get('USE_LOCAL_STORAGE', 'false').lower() == 'true'
         self.local_storage_path = get('LOCAL_STORAGE_PATH', './storage')
+        self.api_key = get('API_KEY', '')
 
     def proxy_config(self, proxy_type: Literal['datacenter', 'residential', 'web-unlocker']) -> ProxyConfig:
         """
