@@ -3,12 +3,12 @@
 CLI client for interacting with the Web Scraper API.
 
 Usage:
-    python scripts/api_client.py --help
-    python scripts/api_client.py jobs list
-    python scripts/api_client.py jobs create --scraper-id maricopa-az --items-file items.jsonl
-    python scripts/api_client.py jobs status <job_id>
-    python scripts/api_client.py jobs results <job_id>
-    python scripts/api_client.py jobs download <job_id> <item_id> --artifact html
+    uv run scripts/api_client.py --help
+    uv run scripts/api_client.py jobs list
+    uv run scripts/api_client.py jobs create --scraper-id maricopa-az --items-file items.jsonl
+    uv run scripts/api_client.py jobs status <job_id>
+    uv run scripts/api_client.py jobs results <job_id>
+    uv run scripts/api_client.py jobs download <job_id> <item_id> --artifact html
 
 Environment Variables:
     API_URL: Base URL for the API (default: http://localhost:8000)
