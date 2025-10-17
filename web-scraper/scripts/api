@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Wrapper script to load .env.prod and run api_client.py
+
+set -euo pipefail
+
+# Get the directory of this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env.prod if it exists
+ENV_FILE="${PROJECT_ROOT}/.env.prod"
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo "⚠️  Warning: .env.prod not found at $ENV_FILE"
+fi
+
+# Run the API client with all arguments passed through
+cd "$PROJECT_ROOT"
+uv run python scripts/api_client.py "$@"

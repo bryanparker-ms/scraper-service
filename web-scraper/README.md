@@ -137,6 +137,75 @@ uv run -m src.worker.main
 
 The controller will be available at `http://localhost:8000`.
 
+### API Client CLI
+
+A command-line interface for interacting with the API.
+
+#### Using with .env.prod
+
+If you have a `.env.prod` file with your production API configuration, use the `api` wrapper script:
+
+```bash
+# Add your API URL and key to .env.prod
+cat > .env.prod <<EOF
+API_URL=https://your-api-url.com
+API_KEY=your-api-key
+EOF
+
+# Use the wrapper script (automatically loads .env.prod)
+./scripts/api jobs list
+./scripts/api jobs status my-job-123
+./scripts/api jobs create --job-id test --scraper-id maricopa-az --items-file items.jsonl
+```
+
+#### Using directly
+
+Set environment variables manually:
+
+```bash
+# Set environment variables (optional)
+export API_URL=http://localhost:8000
+export API_KEY=your-api-key
+
+# List all jobs
+uv run python scripts/api_client.py jobs list
+
+# Create a job from JSONL file
+uv run python scripts/api_client.py jobs create \
+  --job-id my-job-123 \
+  --job-name "My Job" \
+  --scraper-id maricopa-az \
+  --items-file items.jsonl
+
+# Create a job with execution policy
+uv run python scripts/api_client.py jobs create \
+  --job-id my-job-123 \
+  --scraper-id maricopa-az \
+  --items-file items.jsonl \
+  --execution-policy policy.json
+
+# Get job status
+uv run python scripts/api_client.py jobs status my-job-123
+
+# Get job results
+uv run python scripts/api_client.py jobs results my-job-123
+
+# Filter results
+uv run python scripts/api_client.py jobs results my-job-123 --filter success
+
+# Download artifact
+uv run python scripts/api_client.py jobs download my-job-123 item-1 \
+  --artifact html \
+  -o result.html
+
+# Queue operations
+uv run python scripts/api_client.py queue length
+uv run python scripts/api_client.py queue purge
+
+# Use custom API URL
+uv run python scripts/api_client.py --url https://api.example.com jobs list
+```
+
 ### Testing Scrapers Locally
 
 Use the test harness to run scrapers without infrastructure:
