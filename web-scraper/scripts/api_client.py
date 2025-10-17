@@ -51,7 +51,15 @@ class APIClient:
                 return response.json()
             return response.text
         except httpx.HTTPStatusError as e:
-            print(f'❌ HTTP {e.response.status_code}: {e.response.text}')
+            error_text = e.response.text
+            try:
+                # Try to pretty print error response if it's JSON
+                error_json = json.loads(error_text)
+                error_text = json.dumps(error_json, indent=2)
+            except (json.JSONDecodeError, ValueError):
+                # If not JSON, use as-is
+                pass
+            print(f'❌ HTTP {e.response.status_code}:\n{error_text}')
             sys.exit(1)
         except Exception as e:
             print(f'❌ Error: {e}')
@@ -182,6 +190,20 @@ def load_items_file(file_path: str) -> list[dict[str, Any]]:
                         sys.exit(1)
 
                     item = cast(dict[str, Any], data)
+
+                    # Ensure item has required structure for API
+                    if 'item_id' not in item:
+                        print(f'❌ Line {line_num}: missing required "item_id" field')
+                        sys.exit(1)
+
+                    # If item doesn't have 'input' field, transform it
+                    # by moving all fields except 'item_id' into 'input'
+                    if 'input' not in item:
+                        item_id = item.pop('item_id')
+                        item = {
+                            'item_id': item_id,
+                            'input': item
+                        }
 
                     items.append(item)
                 except json.JSONDecodeError as e:
