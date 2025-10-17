@@ -344,11 +344,11 @@ class InfraStack(Stack):
                 period=Duration.seconds(60)
             ),
             scaling_steps=[
-                autoscaling.ScalingInterval(lower=0, upper=0, change=0),      # 0 messages = 0 workers
-                autoscaling.ScalingInterval(lower=1, upper=25, change=1),     # 1-25 messages = 1 worker
-                autoscaling.ScalingInterval(lower=26, upper=100, change=2),   # 26-100 messages = 2 workers
-                autoscaling.ScalingInterval(lower=101, upper=250, change=5),  # 101-250 messages = 5 workers
-                autoscaling.ScalingInterval(lower=251, change=10)             # 251+ messages = 10 workers
+                autoscaling.ScalingInterval(upper=0, change=0),       # 0 messages = 0 workers
+                autoscaling.ScalingInterval(lower=0, upper=25, change=1),     # 1-25 messages = 1 worker
+                autoscaling.ScalingInterval(lower=25, upper=100, change=2),   # 26-100 messages = 2 workers
+                autoscaling.ScalingInterval(lower=100, upper=250, change=5),  # 101-250 messages = 5 workers
+                autoscaling.ScalingInterval(lower=250, change=10)             # 251+ messages = 10 workers
             ],
             adjustment_type=autoscaling.AdjustmentType.EXACT_CAPACITY,
             cooldown=Duration.seconds(300)  # Cooldown period between scaling actions (5 min to avoid thrashing)
